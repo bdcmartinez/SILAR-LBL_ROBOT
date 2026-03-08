@@ -8,15 +8,19 @@
 #include <vector>               // Libreria para declarar vectores
 #include <TMCStepper.h>
 #include <Arduino.h>
-
-
+#include <vector>               // Libreria para declarar vectores
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <iostream>
+#include <string>
+#include <ArduinoJson.h>
 
 LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7);  // DIR, E, RW, RS, D4, D5, D6, D7
 
 RTC_DS3231 rtc;
 
 
-const int chipSelect = 5;  // Pin CS para la tarjeta SD
+const int sd_chip_select = 5;  // Pin CS para la tarjeta SD
 
 //Counter of steps in a routine
 //Steps of the routine
@@ -61,7 +65,28 @@ HardwareSerial TMCSerial(2);
 TMC2209Stepper driver1(&TMCSerial, R_SENSE, DRIVER_ADDR_1);
 TMC2209Stepper driver2(&TMCSerial, R_SENSE, DRIVER_ADDR_2);
 
+// -------- CONECTIVITY -----------------
 
+String device_id = "esp32_0000001";
+String session_id = "1";
+
+const char* ssid = "INFINITUM4034_2.4";
+const char* password = "3152891132";
+
+const char* serverPath = "http://192.168.1.66:8000/basics/hello_world";
+const char* serverUrl =  "http://192.168.1.66:8000/iot/ingest/batch";
+
+const char *nombreArchivo = "/pos.txt";
+
+bool is_wifi_connected;
+bool is_sd_connected;
+bool is_rtc_connected;
+
+File file;
+
+int BATCH_SIZE = 50;
+
+// -------- CONECTIVITY -----------------
 
 
 struct Asociacion {//la estructura crea una relación entre cada nombre de archivo y un número
@@ -75,6 +100,626 @@ DateTime startTime;
 void startTimeForOut(){
   startTime = rtc.now();                             // Momento en que comienza el período
 }
+
+
+bool has_interval_passed(unsigned long &previousTime, unsigned long interval) {
+    unsigned long currentTime = millis();
+
+    if (currentTime - previousTime >= interval) {
+        previousTime = currentTime;
+        return true;
+    }
+
+    return false;
+}
+
+// -------------- API ------------------------
+
+class APIEndPoint {
+  public:
+    APIEndPoint(){
+    }
+    void establishConnection(){
+      WiFi.begin(ssid, password);
+
+      if (WiFi.status() != WL_CONNECTED) {
+          unsigned long start_time = millis();   
+          const unsigned long timeout = 40000;
+          
+          Serial.println("Failed while connecting to WIFI...");
+
+          do {
+              Serial.println("Retrying...");
+              WiFi.reconnect();            
+              delay(3000);
+
+              if (has_interval_passed(start_time, timeout)) {
+                  Serial.println("WiFi connection timeout reached.");
+                  break;
+              }
+
+          } while (WiFi.status() != WL_CONNECTED);
+
+      }
+
+      verifyConnection();  
+    }
+
+    void verifyConnection(){
+      if (WiFi.status() == WL_CONNECTED) {
+          // Serial.println("Connected to the WiFi network");
+          // Serial.println("IP address: ");
+          // Serial.println(WiFi.localIP());
+          is_wifi_connected = true;
+      } else {
+          // Serial.println("WiFi connection failed (timeout).");
+          is_wifi_connected = false;
+      }
+    }
+
+    bool sendDataToEndpoint(JsonDocument& doc) {
+
+      // Serial.println("Verificando conectividad WIFI");
+      // Verify conectivity before sending batch
+      verifyConnection();
+      if(!is_wifi_connected){
+        Serial.println("ERROR | FAILED | error: No WIFI connectivity found...");
+        return false;
+      }
+
+      HTTPClient http;
+      http.setTimeout(20000);   // 10 segundos
+      http.begin(serverUrl);
+      http.addHeader("Content-Type", "application/json");
+
+      String requestBody;
+      serializeJson(doc, requestBody);
+
+      int httpResponseCode = http.POST(requestBody);
+
+      if (httpResponseCode >= 200 && httpResponseCode < 300) {
+          String response = http.getString();
+          Serial.println("INFO | API RESPONSE: " + String(httpResponseCode));
+          http.end();
+          return true;
+      } else {
+          String response = http.getString();
+          Serial.println("ERROR | API RESPONSE: " + String(httpResponseCode));
+          Serial.println("ERROR | BODY: " + response);
+          http.end();
+          return false;
+      }
+    }
+
+
+    void sendData(){
+
+      if(WiFi.status()== WL_CONNECTED){
+        HTTPClient http;  // Declare an HTTPClient object
+
+        http.begin(serverPath);  // Specify the URL
+
+        // Send HTTP GET request and get the response code
+        int httpResponseCode = http.GET();
+
+        if (httpResponseCode > 0) {
+          Serial.print("HTTP Response code: ");
+          Serial.println(httpResponseCode);
+          String payload = http.getString(); // Get the response payload
+          Serial.println(payload);           // Print the response
+        }
+        else {
+          Serial.print("Error code: ");
+          Serial.println(httpResponseCode);
+        }
+
+        http.end();
+      }
+      else {
+        Serial.println("WiFi Disconnected");
+      }
+    }
+
+  private:
+
+
+};
+
+
+
+class SaveSensorData {
+  public:
+    String file_name;
+    String main_dir = "/iot/daily";
+    File myFile;
+    String base_name;
+    APIEndPoint ApiEndpoint;
+
+    // // establish file name
+    SaveSensorData() {
+
+    }
+
+
+    void establishConnection(){
+      Serial.println("Connecting to SD...");
+
+      if (!SD.begin(sd_chip_select)) {
+          unsigned long start_time = millis();
+          const unsigned long timeout = 10000;
+
+          Serial.println("Failed while connecting with SD");
+
+          do {
+              Serial.println("Retrying...");
+              delay(3000);
+
+              if (has_interval_passed(start_time, timeout)) {
+                  Serial.println("SD connection timeout reached.");
+                  break;
+              }
+
+          } while (!SD.begin(sd_chip_select));
+      }
+      
+
+      verifyConnection();
+    }
+
+    void verifyConnection(){
+      if (SD.begin(sd_chip_select)) {
+          // Serial.println("SD connected successfully.");
+          is_sd_connected = true;
+      } else {
+          // Serial.println("SD connection failed.");
+          is_sd_connected = false;
+      }
+    }
+
+    void sendAllFilesInDirectory(const char *dirPath) {
+      bool file_success;
+
+      File dir = SD.open(dirPath);
+      if (!dir) {
+        Serial.println("Failed to open directory");
+        return;
+      }
+      if (!dir.isDirectory()) {
+        Serial.println("Path is not a directory");
+        dir.close();
+        return;
+      }
+
+      File entry;
+      while (true) {
+        entry = dir.openNextFile();
+        if (!entry) break; // no more files
+          String fullPath = String(dirPath) + "/" + String(entry.name());
+
+        if (!entry.isDirectory()) {
+
+          Serial.println("INFO | STARTED | Sending file: " + fullPath);
+          file_success = sendFileInBatches(fullPath);
+          if (file_success){
+            Serial.println("INFO | FINISHED | Sending file: " + fullPath);
+
+            int lastSlash = fullPath.lastIndexOf('/');
+            String fileName = fullPath.substring(lastSlash + 1);
+
+            String newPath = "/iot/saved/" + fileName;
+
+            SD.rename(fullPath, newPath);
+            SD.remove(fullPath);
+
+            // if (SD.rename(fullPath, newPath)) {
+            //     Serial.println("INFO | DONE | File moved to new directory: " + newPath);
+            // } else {
+            //     Serial.println("INFO | FAILED | File moved to new directory: " + newPath);
+            // }
+
+          }else{
+            Serial.println("ERROR | FAILED | Sending file: " + fullPath);
+          }
+        }
+
+        entry.close();
+      }
+
+      dir.close();
+    }
+
+
+
+    bool sendFileInBatches(String filePath) {
+
+
+      // verify connectivity and file existence with SD
+      verifyConnection();
+      if (!is_sd_connected){
+        return 0;
+      }
+
+      File file = SD.open(filePath, FILE_READ);
+      if (!file) {
+        Serial.println("Error opening file");
+        return 0;
+      }
+
+
+      int seq = 0;
+
+
+      Serial.println("INFO | STARTED | Batch uploading");
+      while (file.available()) {
+
+        // Crear JSON dinámico
+        StaticJsonDocument<4096> doc;
+
+        doc["device_id"] = device_id;
+        doc["session_id"] = session_id;
+
+        String batch_id = session_id + "_" + String(seq);
+        doc["batch_id"] = batch_id;
+        doc["seq"] = seq;
+
+        JsonArray rows = doc.createNestedArray("rows");
+
+        int count = 0;
+
+        while (file.available() && count < BATCH_SIZE) {
+          String line = file.readStringUntil('\n');
+          // String lineAux = "HOla Mundo";
+          line.trim();
+          if (line.length() > 0) {
+            rows.add(line);
+            count++;
+          }
+        }
+
+        if (rows.size() > 0) {
+          bool success = sendWithRetry(doc, 10);
+
+          if (!success) {
+            delay(2000);
+            Serial.println("ERROR | FAILED | Sending Batch " + String(seq) + " to API");
+            seq++;
+            return 0;
+            // continue;  // retry same seq
+          }else{
+            Serial.println("INFO | DONE | Sending Batch " + String(seq) + " to API");
+          }
+
+          seq++;
+        }
+      }
+
+      file.close();
+      Serial.println("INFO | FINISHED | Batch uploading");
+      return 1;
+    }
+
+
+    bool sendWithRetry(JsonDocument& doc, int maxRetries = 3) {
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            if (ApiEndpoint.sendDataToEndpoint(doc)) {
+                return true;
+            }
+            Serial.println("INFO | FAILED | Retrying Batch | Attempt: " + String(attempt));
+            delay(500);
+        }
+        return 0;
+    }
+
+    bool moveFile(const String &sourcePath, const String &destinationDir) {
+
+      File sourceFile = SD.open(sourcePath, FILE_READ);
+      Serial.println(sourcePath);
+      if (!sourceFile) {
+        Serial.println("Failed to open source file");
+        return false;
+      }
+
+      if (!SD.exists("/iot/saved")) {
+        SD.mkdir("/iot/saved");
+      }
+
+      // Extract file name from path
+      int lastSlash = sourcePath.lastIndexOf('/');
+      String fileName = sourcePath.substring(lastSlash + 1);
+
+      String destinationPath = destinationDir;
+      Serial.print("File: ");
+      Serial.println(destinationPath);
+
+      File destFile = SD.open(destinationPath, FILE_WRITE);
+      if (!destFile) {
+        Serial.println("Failed to create destination file");
+        sourceFile.close();
+        return false;
+      }
+
+      // Copy content
+      while (sourceFile.available()) {
+        destFile.write(sourceFile.read());
+      }
+
+      sourceFile.close();
+      destFile.close();
+
+      // Delete original
+      if (SD.remove(sourcePath)) {
+        Serial.println("File moved successfully");
+        return true;
+      } else {
+        Serial.println("Failed to delete original file");
+        return false;
+      }
+    }
+
+    // initialize dir if not exist
+    void create(String glanularity) {
+      DateTime current_time = rtc.now();
+      base_name = obtenerNombreArchivo(current_time, glanularity) + ".csv";
+      file_name = main_dir + "/" + base_name;
+
+
+      Serial.print("Writing in file: ");
+      Serial.println(file_name);
+    
+      // Make sure SD is mounted before this block (SD.begin(...))
+
+      // 1) Ensure /iot exis
+      if (!SD.exists("/iot")) {
+        Serial.println("Creating /iot ...");
+        if (!SD.mkdir("/iot")) {
+          Serial.println("ERROR: failed to create /iot");
+        }
+      }
+
+      // 2) Ensure /iot/daily exists
+      if (SD.exists("/iot")) {
+        if (!SD.exists("/iot/daily")) {
+          Serial.println("Creating /iot/daily ...");
+          if (!SD.mkdir("/iot/daily")) {
+            Serial.println("ERROR: failed to create /iot/daily");
+          }
+        }
+      }
+      // 2) Ensure /iot/daily exists
+      if (SD.exists("/iot")) {
+        if (!SD.exists("/iot/saved")) {
+          Serial.println("Creating /iot/saved ...");
+          if (!SD.mkdir("/iot/saved")) {
+            Serial.println("ERROR: failed to create /iot/daily");
+          }
+        }
+      }
+
+
+
+      // 3) Final verification
+      if (SD.exists("/iot/daily")) {
+        Serial.println("Folder /iot/daily ready ✅");
+      } else {
+        Serial.println("Folder /iot/daily NOT available ❌");
+      }
+
+      if (SD.exists(file_name)) {
+        Serial.println("Existe el archivo");
+      } else {
+        Serial.println("No existe el archivo");
+      }
+
+      myFile = SD.open(file_name, FILE_APPEND);
+
+      
+
+    }
+
+    void write(const String& line) {
+      if (myFile) {
+        myFile.print(line);
+        // Serial.println("Wrote: " + line);
+
+      } else {
+        Serial.println("File not open!");
+      }
+    }
+
+    void close(){
+      myFile.flush();  // important to actually write to SD
+      myFile.close();
+    }
+
+    void printAll() {
+
+      File file = SD.open(file_name, FILE_READ);
+
+      Serial.println("---- FILE CONTENT ----");
+
+      while (file.available()) {
+        String line = file.readStringUntil('\n');
+        Serial.println(line);
+      }
+
+      Serial.println("---- END OF FILE ----");
+
+      file.close();
+    }
+
+    bool deleteOnlyFilesInDirectory(const char *dirPath) {
+
+      File dir = SD.open(dirPath);
+      if (!dir) {
+        Serial.println("Failed to open directory");
+        return false;
+      }
+
+      if (!dir.isDirectory()) {
+        Serial.println("Path is not a directory");
+        dir.close();
+        return false;
+      }
+
+      File entry;
+
+      while (true) {
+        entry = dir.openNextFile();
+        if (!entry) break;   // no more files
+
+        if (!entry.isDirectory()) {
+
+          String filePath = String(dirPath) + "/" + String(entry.name());
+
+          Serial.print("Deleting file: ");
+          Serial.println(filePath);
+
+          entry.close();          // IMPORTANT: close before deleting
+          SD.remove(filePath);
+        }
+        else {
+          // It is a directory → skip it
+          entry.close();
+        }
+      }
+
+      dir.close();
+
+      Serial.println("Finished deleting files.");
+      return true;
+    }
+
+
+
+  private: 
+
+    String obtenerNombreArchivo(DateTime fechaHora, String glanularity) {
+      String nombreArchivo = "";
+      // Construir el nombre del archivo usando los componentes de fecha y hora
+      nombreArchivo += String(fechaHora.year(), DEC);
+      nombreArchivo += "-";
+      nombreArchivo += dosDigitos(fechaHora.month());
+      nombreArchivo += "-";
+      nombreArchivo += dosDigitos(fechaHora.day());
+      nombreArchivo += "_";
+
+      if (glanularity == "hour"){
+        nombreArchivo += dosDigitos(fechaHora.hour());
+      }
+
+      if (glanularity == "min"){
+        nombreArchivo += dosDigitos(fechaHora.hour());
+        nombreArchivo += "-";
+        nombreArchivo += dosDigitos(fechaHora.minute());
+      }
+
+      if (glanularity == "sec"){
+        nombreArchivo += dosDigitos(fechaHora.hour());
+        nombreArchivo += "-";
+        nombreArchivo += dosDigitos(fechaHora.minute());
+        nombreArchivo += "-";
+        nombreArchivo += dosDigitos(fechaHora.second());
+      }
+
+      return nombreArchivo;
+    }
+
+    String dosDigitos(int numero) {
+      if (numero < 10) {
+        return "0" + String(numero);
+      } else {
+        return String(numero);
+      }
+    }
+
+};
+
+
+
+class TimeManager {
+  public:
+    int current_day = -1;
+    DateTime started_time;
+
+    TimeManager(){
+      }
+
+    void establishConnection(){
+      Serial.println("Connecting to RTC module...");
+      if (!rtc.begin()) {
+
+          unsigned long start_time = millis();
+          const unsigned long timeout = 10000;
+
+          Serial.println("Failed while connecting with RTC module...");
+
+          do {
+              Serial.println("Retrying...");
+              delay(3000);
+
+              if (has_interval_passed(start_time, timeout)) {
+                  Serial.println("RTC connection timeout reached.");
+                  break;
+              }
+
+          } while (!rtc.begin());
+      }
+
+      if (rtc.begin()) {
+      started_time = rtc.now();
+      }
+      verifyConnection();
+    }
+
+    void verifyConnection(){
+      if (rtc.begin()) {
+          Serial.println("RTC connected successfully.");
+          // rtc.adjust(DateTime(__DATE__,__TIME__));
+          is_rtc_connected = true;
+
+      } else {
+          Serial.println("RTC connection failed.");
+          is_rtc_connected = false;
+      }
+    }
+
+    bool everyCertainMinutes(int minutes){
+      DateTime current_time = rtc.now();
+
+      if ((current_time.unixtime() - started_time.unixtime() >= minutes*60)){
+        started_time = rtc.now();
+        return true;
+      }else{
+        return false;
+      }
+    }
+
+    bool isSpecificTime(int targetHour, int targetMinute){
+
+      
+      if (is_rtc_connected){
+        DateTime now = rtc.now();
+        if (now.hour() == targetHour && now.minute() == targetMinute && current_day != now.day()){
+          current_day = now.day();
+
+          return true;
+        } else{
+          return false;
+        }
+      }
+
+    }
+
+  private:
+
+};
+
+APIEndPoint ApiEndpoint;
+SaveSensorData DataWriter;
+TimeManager Time;
+TimeManager Time2;
+File root;
+
 
 class Files{
   private:
@@ -640,6 +1285,9 @@ class MotorMovement: public Values{
         stepMotor_y(GENERAL_STEP_Y, 150);
         AUX_STEPS_Y += GENERAL_STEP_Y;
 
+        DataWriter.create("hour");
+        printDriverYInfo("Driver 1 Info");
+        DataWriter.close();
       }
 
       while (AUX_STEPS_Y > STEPSY) {
@@ -647,23 +1295,36 @@ class MotorMovement: public Values{
         stepMotor_y(GENERAL_STEP_Y, 150);
         AUX_STEPS_Y -= GENERAL_STEP_Y;
 
+        DataWriter.create("hour");
+        printDriverYInfo("Driver 1 Info");
+        DataWriter.close();
       }
       while (AUX_STEPS_X < STEPSX) {
         digitalWrite(DIRX, HIGH);
         stepMotor_x(GENERAL_STEP_X, 150);
         AUX_STEPS_X += GENERAL_STEP_X;
 
+        DataWriter.create("hour");
+        printDriverXInfo("Driver 2 Info");
+        DataWriter.close();
       }
 
       while (AUX_STEPS_X > STEPSX) {
         digitalWrite(DIRX, LOW);
         stepMotor_x(GENERAL_STEP_X, 150);
         AUX_STEPS_X -= GENERAL_STEP_X;
+
+        DataWriter.create("hour");
+        printDriverXInfo("Driver 2 Info");
+        DataWriter.close();
       }
 
+
+      // if (Time.everyCertainMinutes(10)){
+      //   DataWriter.sendAllFilesInDirectory("/iot/daily");
+      // }
+
       FilesObject.savePos(AUX_STEPS_X,AUX_STEPS_Y);
-      printDriver1Info("Driver 1 Info");
-      printDriver2Info("Driver 2 Info");
 
   }
 
@@ -1207,7 +1868,7 @@ void setup(){
     Serial.println("¡Modulo RTC no encontrado!");
     while (1);
   }
-  if (!SD.begin(chipSelect)) {
+  if (!SD.begin(sd_chip_select)) {
     Serial.println("La inicialización de la tarjeta SD falló. Verifique la tarjeta SD en el ESP32 o Arduino.");
     //Impresión del paso en el que va
     lcd.setCursor(1, 1);
@@ -1217,6 +1878,36 @@ void setup(){
 
     while (1);
   }
+
+  // --------API CONFIGURATION--------
+
+  // ApiEndpoint.establishConnection();
+  DataWriter.establishConnection();
+  Time.establishConnection();
+
+  // Serial.println("----- CONNECTION STATUS -----");
+  // Serial.print("WiFi: ");
+  // Serial.println(is_wifi_connected ? "CONNECTED" : "DISCONNECTED");
+  // Serial.print("SD Card: ");
+  // Serial.println(is_sd_connected ? "CONNECTED" : "DISCONNECTED");
+  // Serial.print("RTC: ");
+  // Serial.println(is_rtc_connected ? "CONNECTED" : "DISCONNECTED");
+  // Serial.println("-----------------------------");
+
+  Serial.println("DIRECTORIO /iot/daily");
+  root = SD.open("/iot/daily");
+  // DataWriter.deleteOnlyFilesInDirectory("/iot/daily");
+  printDirectory(root, 0);
+
+
+  delay(1000);
+
+  Serial.println("DIRECTORIO /iot/saved");
+  root = SD.open("/iot/saved");
+  // DataWriter.deleteOnlyFilesInDirectory("/iot/saved");
+  printDirectory(root, 0);
+
+  // --------API CONFIGURATION--------
 
   //Drivers configuration
   TMCSerial.begin(115200, SERIAL_8N1, RXD2, TXD2);
@@ -1475,81 +2166,102 @@ void push_b() {
   Encoders.push_b();
 }
 
-void printDriver1Info(const char* tag) {
-  Serial.print("\n==================== "); 
-  Serial.print(tag); 
-  Serial.println(" ====================");
+void printDriverYInfo(const char* tag) {
+  String logRow = "";
+
+  // Serial.print("\n==================== "); 
+  // Serial.print(tag); 
+  // Serial.println(" ====================");
+  logRow += String(tag) + ",";
 
   // ---------- UART real check (IFCNT should increase on successful write) ----------
   uint8_t if_before = driver1.IFCNT();
   driver1.toff(3);           // write something safe
-  delay(50);
+  // delay(50);
   uint8_t if_after = driver1.IFCNT();
 
-  Serial.print("IFCNT before/after: ");
-  Serial.print(if_before);
-  Serial.print(" -> ");
-  Serial.println(if_after);
+  // Serial.print("IFCNT before/after: ");
+  // Serial.print(if_before);
+  // Serial.print(" -> ");
+  // Serial.println(if_after);
+  logRow += String(if_before) + "->" + String(if_after) + ",";
 
-  Serial.print("IFCNT (read): ");
-  Serial.println(driver1.IFCNT());
+  // Serial.print("IFCNT (read): ");
+  // Serial.println(driver1.IFCNT());
+  logRow += String(driver1.IFCNT()) + ",";
 
   // ---------- Core status ----------
+  // Serial.print("PWM_SCALE: ");
+  // Serial.println(driver1.PWM_SCALE());
+  logRow += String(driver1.PWM_SCALE()) + ",";
 
-  Serial.print("PWM_SCALE: ");
-  Serial.println(driver1.PWM_SCALE());
+  // Serial.print("GSTAT: 0x");
+  // Serial.println(driver1.GSTAT(), HEX);
+  logRow += String(driver1.GSTAT(), HEX) + ",";
 
-  Serial.print("GSTAT: 0x");
-  Serial.println(driver1.GSTAT(), HEX);
+  // Serial.print("DRV_STATUS: 0x");
+  // Serial.println(driver1.DRV_STATUS(), HEX);
+  logRow += String(driver1.DRV_STATUS(), HEX) + ",";
 
-  Serial.print("DRV_STATUS: 0x");
-  Serial.println(driver1.DRV_STATUS(), HEX);
-
-  Serial.print("IOIN: 0x");
-  Serial.println(driver1.IOIN(), HEX);
+  // Serial.print("IOIN: 0x");
+  // Serial.println(driver1.IOIN(), HEX);
+  logRow += String(driver1.IOIN(), HEX) + ",";
 
   // ---------- Motion / sensing ----------
-  Serial.print("TSTEP: ");
-  Serial.println(driver1.TSTEP());
+  // Serial.print("TSTEP: ");
+  // Serial.println(driver1.TSTEP());
+  logRow += String(driver1.TSTEP()) + ",";
 
-  Serial.print("SG_RESULT: ");
-  Serial.println(driver1.SG_RESULT());
+  // Serial.print("SG_RESULT: ");
+  // Serial.println(driver1.SG_RESULT());
+  logRow += String(driver1.SG_RESULT()) + ",";
 
-  Serial.print("MSCNT (microstep counter): ");
-  Serial.println(driver1.MSCNT());
+  // Serial.print("MSCNT (microstep counter): ");
+  // Serial.println(driver1.MSCNT());
+  logRow += String(driver1.MSCNT()) + ",";
 
-  Serial.print("MSCURACT (coil currents): 0x");
-  Serial.println(driver1.MSCURACT(), HEX);
+  // Serial.print("MSCURACT (coil currents): 0x");
+  // Serial.println(driver1.MSCURACT(), HEX);
+  logRow += String(driver1.MSCURACT(), HEX) + ",";
 
   // ---------- Current / microsteps ----------
-  Serial.print("Current scale (cs_actual): ");
-  Serial.println(driver1.cs_actual());
+  // Serial.print("Current scale (cs_actual): ");
+  // Serial.println(driver1.cs_actual());
+  logRow += String(driver1.cs_actual()) + ",";
 
-  Serial.print("Microsteps (set): ");
-  Serial.println(current_usteps);
+  // Serial.print("Microsteps (set): ");
+  // Serial.println(current_usteps);
+  logRow += String(current_usteps) + ",";
 
-  Serial.print("IHOLD_IRUN: 0x");
-  Serial.println(driver1.IHOLD_IRUN(), HEX);
+  // Serial.print("IHOLD_IRUN: 0x");
+  // Serial.println(driver1.IHOLD_IRUN(), HEX);
+  logRow += String(driver1.IHOLD_IRUN(), HEX) + ",";
 
   // ---------- Configuration snapshots ----------
-  Serial.print("GCONF: 0x");
-  Serial.println(driver1.GCONF(), HEX);
+  // Serial.print("GCONF: 0x");
+  // Serial.println(driver1.GCONF(), HEX);
+  logRow += String(driver1.GCONF(), HEX) + ",";
 
-  Serial.print("CHOPCONF: 0x");
-  Serial.println(driver1.CHOPCONF(), HEX);
+  // Serial.print("CHOPCONF: 0x");
+  // Serial.println(driver1.CHOPCONF(), HEX);
+  logRow += String(driver1.CHOPCONF(), HEX) + ",";
 
-  Serial.print("PWMCONF: 0x");
-  Serial.println(driver1.PWMCONF(), HEX);
+  // Serial.print("PWMCONF: 0x");
+  // Serial.println(driver1.PWMCONF(), HEX);
+  logRow += String(driver1.PWMCONF(), HEX) + ",";
 
   // ---------- Thresholds (mode switching / stall features) ----------
-  Serial.print("TPWMTHRS: ");
-  Serial.println(driver1.TPWMTHRS());
+  // Serial.print("TPWMTHRS: ");
+  // Serial.println(driver1.TPWMTHRS());
+  logRow += String(driver1.TPWMTHRS()) + ",";
 
-  Serial.print("TCOOLTHRS: ");
-  Serial.println(driver1.TCOOLTHRS());
+  // Serial.print("TCOOLTHRS: ");
+  // Serial.println(driver1.TCOOLTHRS());
+  logRow += String(driver1.TCOOLTHRS()) + ",";
 
-  Serial.print("COOLCONF: 0x");
-  Serial.println(driver1.COOLCONF(), HEX);
+  // Serial.print("COOLCONF: 0x");
+  // Serial.println(driver1.COOLCONF(), HEX);
+  logRow += String(driver1.COOLCONF(), HEX) + ",";
 
   // ---------- Safety flags (decoded) ----------
   uint8_t otpw = driver1.otpw();
@@ -1559,101 +2271,130 @@ void printDriver1Info(const char* tag) {
   uint8_t ola  = driver1.ola();
   uint8_t olb  = driver1.olb();
 
-  Serial.print("Temp warning (otpw): ");
-  Serial.println(otpw);
+  // Serial.print("Temp warning (otpw): ");
+  // Serial.println(otpw);
+  logRow += String(otpw) + ",";
 
-  Serial.print("Temp shutdown (ot): ");
-  Serial.println(ot);
+  // Serial.print("Temp shutdown (ot): ");
+  // Serial.println(ot);
+  logRow += String(ot) + ",";
 
-  Serial.print("Short to GND A (s2ga): ");
-  Serial.println(s2ga);
+  // Serial.print("Short to GND A (s2ga): ");
+  // Serial.println(s2ga);
+  logRow += String(s2ga) + ",";
 
-  Serial.print("Short to GND B (s2gb): ");
-  Serial.println(s2gb);
+  // Serial.print("Short to GND B (s2gb): ");
+  // Serial.println(s2gb);
+  logRow += String(s2gb) + ",";
 
-  Serial.print("Open load A (ola): ");
-  Serial.println(ola);
+  // Serial.print("Open load A (ola): ");
+  // Serial.println(ola);
+  logRow += String(ola) + ",";
 
-  Serial.print("Open load B (olb): ");
-  Serial.println(olb);
+  // Serial.print("Open load B (olb): ");
+  // Serial.println(olb);
+  logRow += String(olb) + "\n";
+
+  DataWriter.write(logRow);
 
 }
 
-void printDriver2Info(const char* tag) {
-  Serial.print("\n==================== "); 
-  Serial.print(tag); 
-  Serial.println(" ====================");
+void printDriverXInfo(const char* tag) {
+  String logRow = "";
+
+  // Serial.print("\n==================== "); 
+  // Serial.print(tag); 
+  // Serial.println(" ====================");
+  logRow += String(tag) + ",";
 
   // ---------- UART real check (IFCNT should increase on successful write) ----------
   uint8_t if_before = driver2.IFCNT();
   driver2.toff(3);           // write something safe
-  delay(50);
+  // delay(50);
   uint8_t if_after = driver2.IFCNT();
 
-  Serial.print("IFCNT before/after: ");
-  Serial.print(if_before);
-  Serial.print(" -> ");
-  Serial.println(if_after);
+  // Serial.print("IFCNT before/after: ");
+  // Serial.print(if_before);
+  // Serial.print(" -> ");
+  // Serial.println(if_after);
+  logRow += String(if_before) + "->" + String(if_after) + ",";
 
-  Serial.print("IFCNT (read): ");
-  Serial.println(driver2.IFCNT());
+  // Serial.print("IFCNT (read): ");
+  // Serial.println(driver2.IFCNT());
+  logRow += String(driver2.IFCNT()) + ",";
 
-  // ---------- Core status ----------
+  // // ---------- Core status ----------
+  // Serial.print("PWM_SCALE: ");
+  // Serial.println(driver2.PWM_SCALE());
+  logRow += String(driver2.PWM_SCALE()) + ",";
 
-  Serial.print("PWM_SCALE: ");
-  Serial.println(driver2.PWM_SCALE());
+  // Serial.print("GSTAT: 0x");
+  // Serial.println(driver2.GSTAT(), HEX);
+  logRow += String(driver2.GSTAT(), HEX) + ",";
 
-  Serial.print("GSTAT: 0x");
-  Serial.println(driver2.GSTAT(), HEX);
+  // Serial.print("DRV_STATUS: 0x");
+  // Serial.println(driver2.DRV_STATUS(), HEX);
+  logRow += String(driver2.DRV_STATUS(), HEX) + ",";
 
-  Serial.print("DRV_STATUS: 0x");
-  Serial.println(driver2.DRV_STATUS(), HEX);
+  // Serial.print("IOIN: 0x");
+  // Serial.println(driver2.IOIN(), HEX);
+  logRow += String(driver2.IOIN(), HEX) + ",";
 
-  Serial.print("IOIN: 0x");
-  Serial.println(driver2.IOIN(), HEX);
+  // // ---------- Motion / sensing ----------
+  // Serial.print("TSTEP: ");
+  // Serial.println(driver2.TSTEP());
+  logRow += String(driver2.TSTEP()) + ",";
 
-  // ---------- Motion / sensing ----------
-  Serial.print("TSTEP: ");
-  Serial.println(driver2.TSTEP());
+  // Serial.print("SG_RESULT: ");
+  // Serial.println(driver2.SG_RESULT());
+  logRow += String(driver2.SG_RESULT()) + ",";
 
-  Serial.print("SG_RESULT: ");
-  Serial.println(driver2.SG_RESULT());
+  // Serial.print("MSCNT (microstep counter): ");
+  // Serial.println(driver2.MSCNT());
+  logRow += String(driver2.MSCNT()) + ",";
 
-  Serial.print("MSCNT (microstep counter): ");
-  Serial.println(driver2.MSCNT());
+  // Serial.print("MSCURACT (coil currents): 0x");
+  // Serial.println(driver2.MSCURACT(), HEX);
+  logRow += String(driver2.MSCURACT(), HEX) + ",";
 
-  Serial.print("MSCURACT (coil currents): 0x");
-  Serial.println(driver2.MSCURACT(), HEX);
+  // // ---------- Current / microsteps ----------
+  // Serial.print("Current scale (cs_actual): ");
+  // Serial.println(driver2.cs_actual());
+  logRow += String(driver2.cs_actual()) + ",";
 
-  // ---------- Current / microsteps ----------
-  Serial.print("Current scale (cs_actual): ");
-  Serial.println(driver2.cs_actual());
+  // Serial.print("Microsteps (set): ");
+  // Serial.println(current_usteps);
+  logRow += String(current_usteps) + ",";
 
-  Serial.print("Microsteps (set): ");
-  Serial.println(current_usteps);
+  // Serial.print("IHOLD_IRUN: 0x");
+  // Serial.println(driver2.IHOLD_IRUN(), HEX);
+  logRow += String(driver2.IHOLD_IRUN(), HEX) + ",";
 
-  Serial.print("IHOLD_IRUN: 0x");
-  Serial.println(driver2.IHOLD_IRUN(), HEX);
+  // // ---------- Configuration snapshots ----------
+  // Serial.print("GCONF: 0x");
+  // Serial.println(driver2.GCONF(), HEX);
+  logRow += String(driver2.GCONF(), HEX) + ",";
 
-  // ---------- Configuration snapshots ----------
-  Serial.print("GCONF: 0x");
-  Serial.println(driver2.GCONF(), HEX);
+  // Serial.print("CHOPCONF: 0x");
+  // Serial.println(driver2.CHOPCONF(), HEX);
+  logRow += String(driver2.CHOPCONF(), HEX) + ",";
 
-  Serial.print("CHOPCONF: 0x");
-  Serial.println(driver2.CHOPCONF(), HEX);
+  // Serial.print("PWMCONF: 0x");
+  // Serial.println(driver2.PWMCONF(), HEX);
+  logRow += String(driver2.PWMCONF(), HEX) + ",";
 
-  Serial.print("PWMCONF: 0x");
-  Serial.println(driver2.PWMCONF(), HEX);
+  // // ---------- Thresholds (mode switching / stall features) ----------
+  // Serial.print("TPWMTHRS: ");
+  // Serial.println(driver2.TPWMTHRS());
+  logRow += String(driver2.TPWMTHRS()) + ",";
 
-  // ---------- Thresholds (mode switching / stall features) ----------
-  Serial.print("TPWMTHRS: ");
-  Serial.println(driver2.TPWMTHRS());
+  // Serial.print("TCOOLTHRS: ");
+  // Serial.println(driver2.TCOOLTHRS());
+  logRow += String(driver2.TCOOLTHRS()) + ",";
 
-  Serial.print("TCOOLTHRS: ");
-  Serial.println(driver2.TCOOLTHRS());
-
-  Serial.print("COOLCONF: 0x");
-  Serial.println(driver2.COOLCONF(), HEX);
+  // Serial.print("COOLCONF: 0x");
+  // Serial.println(driver2.COOLCONF(), HEX);
+  logRow += String(driver2.COOLCONF(), HEX) + ",";
 
   // ---------- Safety flags (decoded) ----------
   uint8_t otpw = driver2.otpw();
@@ -1663,23 +2404,74 @@ void printDriver2Info(const char* tag) {
   uint8_t ola  = driver2.ola();
   uint8_t olb  = driver2.olb();
 
-  Serial.print("Temp warning (otpw): ");
-  Serial.println(otpw);
+  // Serial.print("Temp warning (otpw): ");
+  // Serial.println(otpw);
+  logRow += String(otpw) + ",";
 
-  Serial.print("Temp shutdown (ot): ");
-  Serial.println(ot);
+  // Serial.print("Temp shutdown (ot): ");
+  // Serial.println(ot);
+  logRow += String(ot) + ",";
 
-  Serial.print("Short to GND A (s2ga): ");
-  Serial.println(s2ga);
+  // Serial.print("Short to GND A (s2ga): ");
+  // Serial.println(s2ga);
+  logRow += String(s2ga) + ",";
 
-  Serial.print("Short to GND B (s2gb): ");
-  Serial.println(s2gb);
+  // Serial.print("Short to GND B (s2gb): ");
+  // Serial.println(s2gb);
+  logRow += String(s2gb) + ",";
 
-  Serial.print("Open load A (ola): ");
-  Serial.println(ola);
+  // Serial.print("Open load A (ola): ");
+  // Serial.println(ola);
+  logRow += String(ola) + ",";
 
-  Serial.print("Open load B (olb): ");
-  Serial.println(olb);
+  // Serial.print("Open load B (olb): ");
+  // Serial.println(olb);
+  logRow += String(olb) + "\n";
+
+  DataWriter.write(logRow);
 
 }
+
+
+
+void printCurrentTime(){
+
+  DateTime now = rtc.now();
+
+  Serial.print("Current time: ");
+  Serial.print(now.year());
+  Serial.print("/");
+  Serial.print(now.month());
+  Serial.print("/");
+  Serial.print(now.day());
+  Serial.print(" ");
+
+  Serial.print(now.hour());
+  Serial.print(":");
+  Serial.print(now.minute());
+  Serial.print(":");
+  Serial.println(now.second());
+}
+
+
+void printDirectory(File dir, int numTabs) {
+  while (true) {
+    File entry = dir.openNextFile();
+    if (!entry) break; // End of directory
+
+    for (uint8_t i = 0; i < numTabs; i++) Serial.print('\t');
+    Serial.print(entry.name());
+
+    if (entry.isDirectory()) {
+      Serial.println("/");
+      printDirectory(entry, numTabs + 1); // Recursive call
+    } else {
+      Serial.print("\t\t");
+      Serial.println(entry.size(), DEC); // File size
+    }
+    entry.close();
+  }
+
+}
+
 
