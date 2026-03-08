@@ -6,6 +6,8 @@
 #include "SD.h"
 #include "SPI.h"
 #include <vector>               // Libreria para declarar vectores
+#include <TMCStepper.h>
+#include <Arduino.h>
 
 
 
@@ -36,11 +38,54 @@ int DT_B = 34;
 int BUTTON_B = 36;
 
 //Variables for step motors
-int DIRX = 26;
-int PULX = 25;
-int DIRY = 14;
-int PULY = 27;
+int DIRX = 12;
+int PULX = 27;
+
+int DIRY = 25;
+int PULY = 26;
 int VEL = 300;
+
+
+#define RXD2 16
+#define TXD2 17
+int FACTOR_MOVEMENT = 400; // pasos/mm
+
+int GENERAL_STEP_X = 3; //mm
+int GENERAL_STEP_Y = 2; //mm
+
+static constexpr float R_SENSE = 0.11f;
+static constexpr uint8_t DRIVER_ADDR_1 = 0;
+static constexpr uint8_t DRIVER_ADDR_2 = 1;
+
+int current_usteps = 8;
+
+HardwareSerial TMCSerial(2);
+TMC2209Stepper driver1(&TMCSerial, R_SENSE, DRIVER_ADDR_1);
+TMC2209Stepper driver2(&TMCSerial, R_SENSE, DRIVER_ADDR_2);
+
+
+void stepMotor_y(int mm, int intervalUs) {
+  int steps = mm*FACTOR_MOVEMENT;
+  for (int i = 0; i < steps; i++) {
+    digitalWrite(PULY, HIGH);
+    delayMicroseconds(10);      // pulso seguro
+    digitalWrite(PULY, LOW);
+    delayMicroseconds(intervalUs);
+  
+  }
+}
+
+void stepMotor_x(int mm, int intervalUs) {
+  int steps = mm*FACTOR_MOVEMENT;
+  for (int i = 0; i < steps; i++) {
+    digitalWrite(PULX, HIGH);
+    delayMicroseconds(10);      // pulso seguro
+    digitalWrite(PULX, LOW);
+    delayMicroseconds(intervalUs);
+  
+  }
+}
+
 
 struct Asociacion {//la estructura crea una relación entre cada nombre de archivo y un número
   int identificador;
@@ -61,15 +106,15 @@ class Files{
 
   public:
 
-  std::vector<Asociacion> asociaciones;
+    std::vector<Asociacion> asociaciones;
 
-  String fileSelected = "";
+    String fileSelected = "";
 
-  const char *posFile = "/pos.txt";
-  const char *fileName = "/fileName.txt";
-  int stepNumber=0;
-  volatile int AUX_STEPS_X = 0;
-  volatile int AUX_STEPS_Y = 0;
+    const char *posFile = "/pos.txt";
+    const char *fileName = "/fileName.txt";
+    int stepNumber=0;
+    volatile int AUX_STEPS_X = 0;
+    volatile int AUX_STEPS_Y = 0;
   
 
     volatile int getAUX_STEPS_X(){
@@ -340,11 +385,6 @@ class Files{
 
 };
 
-
-
-
-
-
 class Encoder{
   private:
     unsigned long ultimoTiempo = 0;
@@ -457,10 +497,10 @@ class Encoder{
         if (digitalRead(DT_A) == HIGH)                    // si B es HIGH, sentido horario
         {
           POS_A++;  // incrementa POS_A en 1
-          STEPSX = STEPSX + 150;
+          STEPSX = STEPSX + GENERAL_STEP_X;
         } else {    // si B es LOW, senti anti horario
           POS_A--;  // decrementa POS_A en 1
-          STEPSX = STEPSX - 150;
+          STEPSX = STEPSX - GENERAL_STEP_X;
         }
 
       POS_A = min(limit_POS_A,max(0, POS_A));
@@ -479,10 +519,10 @@ class Encoder{
         if (digitalRead(DT_B) == HIGH)                    // si B es HIGH, sentido horario
         {
           POS_B++;  // incrementa POS_A en 1
-          STEPSY = STEPSY + 100;
+          STEPSY = STEPSY + GENERAL_STEP_Y;
         } else {        // si B es LOW, senti anti horario
           POS_B--;  // decrementa POS_A en 1
-          STEPSY = STEPSY - 100;
+          STEPSY = STEPSY - GENERAL_STEP_Y;
         }
 
 
@@ -598,75 +638,33 @@ class MotorMovement: public Values{
 
     while (AUX_STEPS_Y < STEPSY) {
       digitalWrite(DIRY, HIGH);
-
-      for (int i = 0; i < 100; i++) {
-        digitalWrite(PULY, HIGH);
-        delayMicroseconds(VEL);
-        digitalWrite(PULY, LOW);
-        delayMicroseconds(VEL);
-      }
-
-      AUX_STEPS_Y += 100;
-      //FilesObject.saveSteps(AUX_STEPS_X,AUX_STEPS_Y);
-
-      
-
+      stepMotor_y(GENERAL_STEP_Y, 150);
+      AUX_STEPS_Y += GENERAL_STEP_Y;
 
     }
 
     while (AUX_STEPS_Y > STEPSY) {
-    
-
-
-
       digitalWrite(DIRY, LOW);
-
-      for (int i = 0; i < 100; i++) {
-        digitalWrite(PULY, HIGH);
-        delayMicroseconds(VEL);
-        digitalWrite(PULY, LOW);
-        delayMicroseconds(VEL);
-      }
-      AUX_STEPS_Y -= 100;
-      //FilesObject.saveSteps(AUX_STEPS_X,AUX_STEPS_Y);
-
+      stepMotor_y(GENERAL_STEP_Y, 150);
+      AUX_STEPS_Y -= GENERAL_STEP_Y;
 
     }
     while (AUX_STEPS_X < STEPSX) {
-
-
       digitalWrite(DIRX, HIGH);
-
-
-      for (int i = 0; i < 150; i++) {
-        digitalWrite(PULX, HIGH);
-        delayMicroseconds(VEL);
-        digitalWrite(PULX, LOW);
-        delayMicroseconds(VEL);
-      }
-      AUX_STEPS_X += 150;
-      //FilesObject.saveSteps(AUX_STEPS_X,AUX_STEPS_Y);
-
+      stepMotor_x(GENERAL_STEP_X, 150);
+      AUX_STEPS_X += GENERAL_STEP_X;
 
     }
 
     while (AUX_STEPS_X > STEPSX) {
       digitalWrite(DIRX, LOW);
-
-      for (int i = 0; i < 150; i++) {
-        digitalWrite(PULX, HIGH);
-        delayMicroseconds(VEL);
-        digitalWrite(PULX, LOW);
-        delayMicroseconds(VEL);
-      }
-
-      AUX_STEPS_X -= 150;
-      //FilesObject.saveSteps(AUX_STEPS_X,AUX_STEPS_Y);
-
-
+      stepMotor_x(GENERAL_STEP_X, 150);
+      AUX_STEPS_X -= GENERAL_STEP_X;
     }
 
     FilesObject.savePos(AUX_STEPS_X,AUX_STEPS_Y);
+    printDriver1Info("Driver 1 Info");
+    printDriver2Info("Driver 2 Info");
 
   }
 
@@ -675,7 +673,7 @@ class MotorMovement: public Values{
 
 //Classes inherited from OptionNavegation
 
-class OptionNavigation{
+class ILCDBaseNavigation{
   public:
     volatile int POS_A;      // variable POS_A con valor inicial de 50 y definida
     volatile int AUX_POS_A;  //almacena el valor de pos_A
@@ -688,7 +686,7 @@ class OptionNavigation{
     bool aux; //Indica que está en ejecución el ciclo
 
 
-    OptionNavigation() : OptionSelection(-1),aux(1){}
+    ILCDBaseNavigation() : OptionSelection(-1),aux(1){}
 
     virtual void Refresh(Encoder& EncoderObject){
       Serial.print("Funciona");
@@ -787,11 +785,11 @@ class OptionNavigation{
 
 };
 
-class RefreshRunMode: public OptionNavigation{
+class LCDRefreshRunMode: public ILCDBaseNavigation{
   private:
   public:
     DateTime fecha;
-    //RefreshRunMode(int option_number) : OptionNavigation(option_number) {}
+    //LCDRefreshRunMode(int option_number) : ILCDBaseNavigation(option_number) {}
 
     void startClock(){
       fecha = rtc.now();                             // Momento en que comienza el período
@@ -852,15 +850,12 @@ class RefreshRunMode: public OptionNavigation{
 
 
 
-class LineRefresh: public OptionNavigation{
+class LCDLineRefresh: public ILCDBaseNavigation{
   private:
   public:
     std::vector<Asociacion> palabras;
     int currentPage=0;
     int auxiliar;
-
-
-    
 
     //Esta función inserta el listado de opciones
     void OptionNames(const std::vector<Asociacion>& lista_palabras){
@@ -1061,7 +1056,7 @@ class LineRefresh: public OptionNavigation{
 
 };
 
-class InitialMenu: public LineRefresh{
+class LCDInitialMenu: public LCDLineRefresh{
   public:
     void Refresh(Encoder& EncoderObject) override{ 
       DateTime fecha = rtc.now();
@@ -1077,12 +1072,12 @@ class InitialMenu: public LineRefresh{
 
 };
 
-class RunMode: public OptionNavigation{
+class LCDRunMode: public ILCDBaseNavigation{
   private:
   public:
     int layerNumber;
 
-    //RunMode (int option_number) : OptionNavigation(option_number){}
+    //LCDRunMode (int option_number) : ILCDBaseNavigation(option_number){}
 
     void Refresh (Encoder& EncoderObject) override {
         int POS_A=EncoderObject.getPOS_A();
@@ -1108,9 +1103,7 @@ class RunMode: public OptionNavigation{
 };
 
 
-
-
-class NewModeSteps: public OptionNavigation{
+class LCDNewModeSteps: public ILCDBaseNavigation{
   private:
   public:
     int POS_A;
@@ -1154,7 +1147,7 @@ class NewModeSteps: public OptionNavigation{
 };
 
 
-class NewModeTime: public OptionNavigation{
+class LCDNewModeTime: public ILCDBaseNavigation{
   public:
     int POS_A;
     int POS_B;
@@ -1183,7 +1176,12 @@ class NewModeTime: public OptionNavigation{
 };
 
 
+
+
 void setup(){
+  Serial.begin(115200);
+  delay(1000);
+
   lcd.setBacklightPin(3, POSITIVE);  // puerto P3 de PCF8574 como positivo
   lcd.setBacklight(HIGH);            // habilita iluminacion posterior de LCD
   lcd.begin(20, 4);                  // 16 columnas por 2 lineas para LCD 1602A
@@ -1216,10 +1214,64 @@ void setup(){
   }
   if (!SD.begin(chipSelect)) {
     Serial.println("La inicialización de la tarjeta SD falló. Verifique la tarjeta SD en el ESP32 o Arduino.");
-    while (1)
-      ;
+    //Impresión del paso en el que va
+    lcd.setCursor(1, 1);
+    lcd.print("SD card not found!");
+    lcd.setCursor(1, 2);
+    lcd.print("connect and restart");
+
+    
+    while (1);
   }
-  Serial.begin(115200);
+
+  TMCSerial.begin(115200, SERIAL_8N1, RXD2, TXD2);
+
+  // Driver
+  driver1.begin();
+  driver2.begin();
+
+
+  // UART recomendado
+  driver1.pdn_disable(true);       // usar PDN_UART como UART
+  driver2.pdn_disable(true);       // usar PDN_UART como UART
+
+  driver1.I_scale_analog(false);   // no depender del pot
+  driver2.I_scale_analog(false);   // no depender del pot
+
+  // Chopper ON (si toff=0 no mueve)
+  driver1.toff(3);
+  driver2.toff(3);
+
+
+  // Corriente: tu motor es 0.7A -> empieza seguro
+  driver1.rms_current(500);        // sube/baja luego (600–700 recomendado)
+  driver2.rms_current(500);        // sube/baja luego (600–700 recomendado)
+
+
+  driver1.microsteps(current_usteps);
+  driver2.microsteps(current_usteps);
+
+  
+  // Lee una vez
+  Serial.print("IFCNT: "); Serial.println(driver1.IFCNT());
+  Serial.print("GSTAT: 0x"); Serial.println(driver1.GSTAT(), HEX);
+  Serial.print("IOIN: 0x"); Serial.println(driver1.IOIN(), HEX);
+  Serial.print("DRV_STATUS: 0x"); Serial.println(driver1.DRV_STATUS(), HEX);
+  Serial.print("cs_actual: "); Serial.println(driver1.cs_actual());
+
+  Serial.println("=== END SETUP READ ===");
+
+
+
+
+  // Lee una vez
+  Serial.print("IFCNT: "); Serial.println(driver2.IFCNT());
+  Serial.print("GSTAT: 0x"); Serial.println(driver2.GSTAT(), HEX);
+  Serial.print("IOIN: 0x"); Serial.println(driver2.IOIN(), HEX);
+  Serial.print("DRV_STATUS: 0x"); Serial.println(driver2.DRV_STATUS(), HEX);
+  Serial.print("cs_actual: "); Serial.println(driver2.cs_actual());
+
+  Serial.println("=== END SETUP READ ===");
 
 
 }
@@ -1232,105 +1284,107 @@ void loop(){
   std::vector<Asociacion> c1;
   std::vector<Asociacion> c2;
 
-  LineRefresh Opt_Settings;
-  InitialMenu Opt_Inicial;
-  RunMode Opt_RunMode;
-  RefreshRunMode Opt_RefreshRunMode;
+  LCDLineRefresh LCD_LRSettings;
+  LCDLineRefresh LCD_LRChangeMode;
 
-  Files file_OfData;
+  LCDInitialMenu LCD_StartMenu;
+  LCDRunMode LCD_RunMode;
+  LCDRefreshRunMode LCD_RefreshRunMode;
+  LCDNewModeSteps LCD_NewModeSteps;
+  LCDNewModeTime LCD_NewModeTime;
+
+
+  Files SD_Files;
   MotorMovement Motors;
-  LineRefresh Opt_ChangeMode;
-  NewModeSteps Opt_NewModeSteps;
-  NewModeTime Opt_NewModeTime;
+
 
 
 
   //alueRefresh valueRefresh(0);
-  //OptionNavigation* Opt_RunMode = &valueRefresh;
+  //ILCDBaseNavigation* LCD_RunMode = &valueRefresh;
 
-  c1 = {{0,"INICIAR"},{1,"CONFIGURACION"}};
-  Opt_Inicial.OptionNames(c1);
-  Opt_Inicial.setToZero(Encoders);
-  while(Opt_Inicial.getAUX()){
-  switch (Opt_Inicial.OptionSelection){
+  c1 = {{0,"CORRER PASOS"},{1,"CONFIGURACION"}};
+  LCD_StartMenu.OptionNames(c1);
+  LCD_StartMenu.setToZero(Encoders);
+  while(LCD_StartMenu.getAUX()){
+  switch (LCD_StartMenu.OptionSelection){
 
   case 0: //Opcion Iniciar ciclo
     startTimeForOut();
-    Opt_RunMode.setToZero(Encoders);
-    while(Opt_RunMode.getAUX()){
+    LCD_RunMode.setToZero(Encoders);
+    while(LCD_RunMode.getAUX()){
 
-      switch(Opt_RunMode.OptionSelection){
+      switch(LCD_RunMode.OptionSelection){
         case 0:
-          Opt_RefreshRunMode.setToZero(Encoders);
-          while(Opt_RefreshRunMode.getAUX()){
-            Opt_RefreshRunMode.inter();
-            Opt_RefreshRunMode.startClock(); //Empieza a medir el tiempo inicial del proceso
+          LCD_RefreshRunMode.setToZero(Encoders);
+          while(LCD_RefreshRunMode.getAUX()){
+            LCD_RefreshRunMode.inter();
+            LCD_RefreshRunMode.startClock(); //Empieza a medir el tiempo inicial del proceso
 
-            file_OfData.selectLastFile(); //Hace lo necesario para recopilar los datos del último archivo
+            SD_Files.selectLastFile(); //Hace lo necesario para recopilar los datos del último archivo
 
-
-            for (int i = 0; i < Opt_RunMode.getlayerNumber(); i++) {
-              for (int j = 0; j < file_OfData.getstepNumber(); j++) {
-                volatile int STEPS_X = X[j] * 150;
-                volatile int STEPS_Y = Y[j] * 100;
+            for (int i = 0; i < LCD_RunMode.getlayerNumber(); i++) {
+              for (int j = 0; j < SD_Files.getstepNumber(); j++) {
+                volatile int STEPS_X = X[j] * GENERAL_STEP_X;
+                volatile int STEPS_Y = Y[j] * GENERAL_STEP_Y;
                 
-                file_OfData.readPreviousSteps();
-                Motors.moveFromTo(file_OfData,file_OfData.getAUX_STEPS_X(), file_OfData.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
-                Opt_RefreshRunMode.Refresh(i ,j); //Empezará a contar el tiempo
+                SD_Files.readPreviousSteps();
+                Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
+                LCD_RefreshRunMode.Refresh(i ,j); //Empezará a contar el tiempo
 
               }
             }
-            Opt_RefreshRunMode.out(Encoders);
-            Opt_RefreshRunMode.outForce(Encoders);
+            LCD_RefreshRunMode.out(Encoders);
+            LCD_RefreshRunMode.outForce(Encoders);
           }
-        Opt_RunMode.OptionSelection=-1;
+        LCD_RunMode.OptionSelection=-1;
         
         break;
         default:
-          Opt_RunMode.Refresh(Encoders);//Imprime los valores actualizados en la pantalla
-          Opt_RunMode.saveLayerNumber(Encoders);//Guarda la opción seleccionada
-          Opt_RunMode.buttomState(Encoders);//Verifica si el usuario presiono el encoder
-          Opt_RunMode.checkTimeForOut(Encoders);
-          Opt_RunMode.out(Encoders); //Configura la opción de salida del while
+          LCD_RunMode.Refresh(Encoders);//Imprime los valores actualizados en la pantalla
+          LCD_RunMode.saveLayerNumber(Encoders);//Guarda la opción seleccionada
+          LCD_RunMode.buttomState(Encoders);//Verifica si el usuario presiono el encoder
+          LCD_RunMode.checkTimeForOut(Encoders);
+          LCD_RunMode.out(Encoders); //Configura la opción de salida del while
 
       }
     }
-    Opt_Inicial.OptionSelection=-1;
-    Opt_Inicial.currentOption=0;
+    LCD_StartMenu.OptionSelection=-1;
+    LCD_StartMenu.currentOption=0;
 
   break;
 
   case 1://Menú 2 de configuración
     startTimeForOut();
-    Opt_Settings.setToZero(Encoders);
-    while(Opt_Settings.getAUX()){
+    LCD_LRSettings.setToZero(Encoders);
+    while(LCD_LRSettings.getAUX()){
       c2 = {{0,"CAMBIAR MODO"},{1,"MODIFICAR TIEMPOS"},{2,"MODO NUEVO"}};
-      switch(Opt_Settings.OptionSelection){
+      switch(LCD_LRSettings.OptionSelection){
         case 0:
-        startTimeForOut();
-        Opt_ChangeMode.setToZero(Encoders);
-        file_OfData.fileAssociations();
-        Opt_ChangeMode.OptionNames(file_OfData.asociaciones);
-        while(Opt_ChangeMode.getAUX()){
-          switch(Opt_ChangeMode.OptionSelection){
-            case 0:
-              file_OfData.sendFileName(file_OfData.asociaciones[Opt_ChangeMode.currentOption].nombreArchivo);
-              file_OfData.saveNameFile();
-              Opt_ChangeMode.OptionSelection = -1;
-              Opt_ChangeMode.currentOption = 0;
-            break;
+          startTimeForOut();
+          LCD_LRChangeMode.setToZero(Encoders);
+          SD_Files.fileAssociations();
+          LCD_LRChangeMode.OptionNames(SD_Files.asociaciones);
+          while(LCD_LRChangeMode.getAUX()){
+            switch(LCD_LRChangeMode.OptionSelection){
+              case 0:
+                SD_Files.sendFileName(SD_Files.asociaciones[LCD_LRChangeMode.currentOption].nombreArchivo);
+                SD_Files.saveNameFile();
+                LCD_LRChangeMode.OptionSelection = -1;
+                LCD_LRChangeMode.currentOption = 0;
+              break;
 
-            default:
-              Opt_ChangeMode.lineRefresh(Encoders);
-              Opt_ChangeMode.buttomState(Encoders,0);
-              Opt_ChangeMode.checkTimeForOut(Encoders);
-              Opt_ChangeMode.out(Encoders);
-              
+              default:
+                LCD_LRChangeMode.lineRefresh(Encoders);
+                LCD_LRChangeMode.buttomState(Encoders,0);
+                LCD_LRChangeMode.checkTimeForOut(Encoders);
+                LCD_LRChangeMode.out(Encoders);
+                
+            }
           }
-        }
-        
-        Opt_Settings.OptionSelection=-1;
-        Opt_Settings.currentOption=0;
+          
+          LCD_LRSettings.OptionSelection=-1;
+          LCD_LRSettings.currentOption=0;
 
         break;
 
@@ -1338,80 +1392,80 @@ void loop(){
         break;
 
         case 2:
-        Opt_NewModeSteps.setToZero(Encoders);
+        LCD_NewModeSteps.setToZero(Encoders);
         Encoders.savelimit_POS_A(100);
         Encoders.savelimit_POS_B(100);
-        while(Opt_NewModeSteps.getAUX()){
+        while(LCD_NewModeSteps.getAUX()){
           
-          switch(Opt_NewModeSteps.OptionSelection){
+          switch(LCD_NewModeSteps.OptionSelection){
             //Se ejecuta esta opción en caso de que se presione de nuevo el encoder 1
             case 0:
               //aqui debería guardarse los valores de los encoders previos
               Motors.saveData(Encoders);
-              Opt_NewModeTime.setToZero(Encoders);
+              LCD_NewModeTime.setToZero(Encoders);
               Encoders.savelimit_POS_A(1000);
               Encoders.savelimit_POS_B(60);
-              while(Opt_NewModeTime.getAUX()){
-                switch(Opt_NewModeTime.OptionSelection){
+              while(LCD_NewModeTime.getAUX()){
+                switch(LCD_NewModeTime.OptionSelection){
                   case 0:
-                    file_OfData.saveStep(Motors.getPOS_A(),Motors.getPOS_B(),Encoders.getPOS_A(),Encoders.getPOS_B(),Opt_NewModeSteps.stepNumber);
-                    Opt_NewModeTime.outForce(Encoders);
+                    SD_Files.saveStep(Motors.getPOS_A(),Motors.getPOS_B(),Encoders.getPOS_A(),Encoders.getPOS_B(),LCD_NewModeSteps.stepNumber);
+                    LCD_NewModeTime.outForce(Encoders);
                     Motors.restoreData(Encoders);
-                    Opt_NewModeSteps.stepNumber+=1;
+                    LCD_NewModeSteps.stepNumber+=1;
                   break;
                   default:
-                    Opt_NewModeTime.Refresh(Encoders);
-                    Opt_NewModeTime.buttomState(Encoders);
-                    Opt_NewModeTime.out(Encoders); 
+                    LCD_NewModeTime.Refresh(Encoders);
+                    LCD_NewModeTime.buttomState(Encoders);
+                    LCD_NewModeTime.out(Encoders); 
                 }
               }
-              Opt_NewModeSteps.OptionSelection=-1;
+              LCD_NewModeSteps.OptionSelection=-1;
 
-              //Encoders.saveSTEPSX(file_OfData.getAUX_STEPS_X());
-              //Encoders.saveSTEPSY(file_OfData.getAUX_STEPS_Y());
+              //Encoders.saveSTEPSX(SD_Files.getAUX_STEPS_X());
+              //Encoders.saveSTEPSY(SD_Files.getAUX_STEPS_Y());
             break;
             default:
-              Opt_NewModeSteps.Refresh(Encoders);
-              Opt_NewModeSteps.buttomState(Encoders);
+              LCD_NewModeSteps.Refresh(Encoders);
+              LCD_NewModeSteps.buttomState(Encoders);
         
-              file_OfData.readPreviousSteps();
-              Motors.moveFromTo(file_OfData,file_OfData.getAUX_STEPS_X(), file_OfData.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
+              SD_Files.readPreviousSteps();
+              Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
 
-              Opt_NewModeSteps.out(Encoders,file_OfData); //Esta salida debería ser especial y que al salir guarde los datos sacas
+              LCD_NewModeSteps.out(Encoders,SD_Files); //Esta salida debería ser especial y que al salir guarde los datos sacas
               //              //Se guardan los valores x y dados por el usuario, esto para formar un paso
-              //file_OfData.saveSteps(file_OfData.getAUX_STEPS_X(), file_OfData.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
+              //SD_Files.saveSteps(SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
 
           }
         }
-        Opt_Settings.OptionSelection=-1;
-        Opt_Settings.currentOption=0;
+        LCD_LRSettings.OptionSelection=-1;
+        LCD_LRSettings.currentOption=0;
 
         break;
 
         default:
 
 
-          Opt_Settings.OptionNames(c2);
-          Opt_Settings.lineRefresh(Encoders);
-          Opt_Settings.buttomState(Encoders);
-          Opt_Settings.checkTimeForOut(Encoders);
-          Opt_Settings.out(Encoders);
+          LCD_LRSettings.OptionNames(c2);
+          LCD_LRSettings.lineRefresh(Encoders);
+          LCD_LRSettings.buttomState(Encoders);
+          LCD_LRSettings.checkTimeForOut(Encoders);
+          LCD_LRSettings.out(Encoders);
 
 
       }
     }
-    Opt_Inicial.OptionSelection = -1;
-    Opt_Inicial.currentOption = 0;
+    LCD_StartMenu.OptionSelection = -1;
+    LCD_StartMenu.currentOption = 0;
 
   break;
 
   default://Imprime el menú inicial
 
-    //Opt_Inicial.inter();
-    Opt_Inicial.Refresh(Encoders);
-    Opt_Inicial.lineRefresh(Encoders);
-    Opt_Inicial.out(Encoders);
-    Opt_Inicial.buttomState(Encoders);
+    //LCD_StartMenu.inter();
+    LCD_StartMenu.Refresh(Encoders);
+    LCD_StartMenu.lineRefresh(Encoders);
+    LCD_StartMenu.out(Encoders);
+    LCD_StartMenu.buttomState(Encoders);
   }
 
 }
@@ -1437,4 +1491,214 @@ void push_b() {
   Encoders.push_b();
 }
 
+
+
+
+void printDriver1Info(const char* tag) {
+  Serial.print("\n==================== "); 
+  Serial.print(tag); 
+  Serial.println(" ====================");
+
+  // ---------- UART real check (IFCNT should increase on successful write) ----------
+  uint8_t if_before = driver1.IFCNT();
+  driver1.toff(3);           // write something safe
+  delay(50);
+  uint8_t if_after = driver1.IFCNT();
+
+  Serial.print("IFCNT before/after: ");
+  Serial.print(if_before);
+  Serial.print(" -> ");
+  Serial.println(if_after);
+
+  Serial.print("IFCNT (read): ");
+  Serial.println(driver1.IFCNT());
+
+  // ---------- Core status ----------
+
+  Serial.print("PWM_SCALE: ");
+  Serial.println(driver1.PWM_SCALE());
+
+  Serial.print("GSTAT: 0x");
+  Serial.println(driver1.GSTAT(), HEX);
+
+  Serial.print("DRV_STATUS: 0x");
+  Serial.println(driver1.DRV_STATUS(), HEX);
+
+  Serial.print("IOIN: 0x");
+  Serial.println(driver1.IOIN(), HEX);
+
+  // ---------- Motion / sensing ----------
+  Serial.print("TSTEP: ");
+  Serial.println(driver1.TSTEP());
+
+  Serial.print("SG_RESULT: ");
+  Serial.println(driver1.SG_RESULT());
+
+  Serial.print("MSCNT (microstep counter): ");
+  Serial.println(driver1.MSCNT());
+
+  Serial.print("MSCURACT (coil currents): 0x");
+  Serial.println(driver1.MSCURACT(), HEX);
+
+  // ---------- Current / microsteps ----------
+  Serial.print("Current scale (cs_actual): ");
+  Serial.println(driver1.cs_actual());
+
+  Serial.print("Microsteps (set): ");
+  Serial.println(current_usteps);
+
+  Serial.print("IHOLD_IRUN: 0x");
+  Serial.println(driver1.IHOLD_IRUN(), HEX);
+
+  // ---------- Configuration snapshots ----------
+  Serial.print("GCONF: 0x");
+  Serial.println(driver1.GCONF(), HEX);
+
+  Serial.print("CHOPCONF: 0x");
+  Serial.println(driver1.CHOPCONF(), HEX);
+
+  Serial.print("PWMCONF: 0x");
+  Serial.println(driver1.PWMCONF(), HEX);
+
+  // ---------- Thresholds (mode switching / stall features) ----------
+  Serial.print("TPWMTHRS: ");
+  Serial.println(driver1.TPWMTHRS());
+
+  Serial.print("TCOOLTHRS: ");
+  Serial.println(driver1.TCOOLTHRS());
+
+  Serial.print("COOLCONF: 0x");
+  Serial.println(driver1.COOLCONF(), HEX);
+
+  // ---------- Safety flags (decoded) ----------
+  uint8_t otpw = driver1.otpw();
+  uint8_t ot   = driver1.ot();
+  uint8_t s2ga = driver1.s2ga();
+  uint8_t s2gb = driver1.s2gb();
+  uint8_t ola  = driver1.ola();
+  uint8_t olb  = driver1.olb();
+
+  Serial.print("Temp warning (otpw): ");
+  Serial.println(otpw);
+
+  Serial.print("Temp shutdown (ot): ");
+  Serial.println(ot);
+
+  Serial.print("Short to GND A (s2ga): ");
+  Serial.println(s2ga);
+
+  Serial.print("Short to GND B (s2gb): ");
+  Serial.println(s2gb);
+
+  Serial.print("Open load A (ola): ");
+  Serial.println(ola);
+
+  Serial.print("Open load B (olb): ");
+  Serial.println(olb);
+
+}
+
+void printDriver2Info(const char* tag) {
+  Serial.print("\n==================== "); 
+  Serial.print(tag); 
+  Serial.println(" ====================");
+
+  // ---------- UART real check (IFCNT should increase on successful write) ----------
+  uint8_t if_before = driver2.IFCNT();
+  driver2.toff(3);           // write something safe
+  delay(50);
+  uint8_t if_after = driver2.IFCNT();
+
+  Serial.print("IFCNT before/after: ");
+  Serial.print(if_before);
+  Serial.print(" -> ");
+  Serial.println(if_after);
+
+  Serial.print("IFCNT (read): ");
+  Serial.println(driver2.IFCNT());
+
+  // ---------- Core status ----------
+
+  Serial.print("PWM_SCALE: ");
+  Serial.println(driver2.PWM_SCALE());
+
+  Serial.print("GSTAT: 0x");
+  Serial.println(driver2.GSTAT(), HEX);
+
+  Serial.print("DRV_STATUS: 0x");
+  Serial.println(driver2.DRV_STATUS(), HEX);
+
+  Serial.print("IOIN: 0x");
+  Serial.println(driver2.IOIN(), HEX);
+
+  // ---------- Motion / sensing ----------
+  Serial.print("TSTEP: ");
+  Serial.println(driver2.TSTEP());
+
+  Serial.print("SG_RESULT: ");
+  Serial.println(driver2.SG_RESULT());
+
+  Serial.print("MSCNT (microstep counter): ");
+  Serial.println(driver2.MSCNT());
+
+  Serial.print("MSCURACT (coil currents): 0x");
+  Serial.println(driver2.MSCURACT(), HEX);
+
+  // ---------- Current / microsteps ----------
+  Serial.print("Current scale (cs_actual): ");
+  Serial.println(driver2.cs_actual());
+
+  Serial.print("Microsteps (set): ");
+  Serial.println(current_usteps);
+
+  Serial.print("IHOLD_IRUN: 0x");
+  Serial.println(driver2.IHOLD_IRUN(), HEX);
+
+  // ---------- Configuration snapshots ----------
+  Serial.print("GCONF: 0x");
+  Serial.println(driver2.GCONF(), HEX);
+
+  Serial.print("CHOPCONF: 0x");
+  Serial.println(driver2.CHOPCONF(), HEX);
+
+  Serial.print("PWMCONF: 0x");
+  Serial.println(driver2.PWMCONF(), HEX);
+
+  // ---------- Thresholds (mode switching / stall features) ----------
+  Serial.print("TPWMTHRS: ");
+  Serial.println(driver2.TPWMTHRS());
+
+  Serial.print("TCOOLTHRS: ");
+  Serial.println(driver2.TCOOLTHRS());
+
+  Serial.print("COOLCONF: 0x");
+  Serial.println(driver2.COOLCONF(), HEX);
+
+  // ---------- Safety flags (decoded) ----------
+  uint8_t otpw = driver2.otpw();
+  uint8_t ot   = driver2.ot();
+  uint8_t s2ga = driver2.s2ga();
+  uint8_t s2gb = driver2.s2gb();
+  uint8_t ola  = driver2.ola();
+  uint8_t olb  = driver2.olb();
+
+  Serial.print("Temp warning (otpw): ");
+  Serial.println(otpw);
+
+  Serial.print("Temp shutdown (ot): ");
+  Serial.println(ot);
+
+  Serial.print("Short to GND A (s2ga): ");
+  Serial.println(s2ga);
+
+  Serial.print("Short to GND B (s2gb): ");
+  Serial.println(s2gb);
+
+  Serial.print("Open load A (ola): ");
+  Serial.println(ola);
+
+  Serial.print("Open load B (olb): ");
+  Serial.println(olb);
+
+}
 
