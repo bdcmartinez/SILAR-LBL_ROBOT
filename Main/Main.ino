@@ -5,10 +5,10 @@
 #include "FS.h"                 // Librerias de para memoria SD
 #include "SD.h"
 #include "SPI.h"
-#include <vector>               // Libreria para declarar vectores
+#include <vector>  // Libreria para declarar vectores
 #include <TMCStepper.h>
 #include <Arduino.h>
-#include <vector>               // Libreria para declarar vectores
+#include <vector>  // Libreria para declarar vectores
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <iostream>
@@ -46,10 +46,10 @@ int DIRY = 25;
 int PULY = 26;
 int VEL = 300;
 
-int FACTOR_MOVEMENT = 400; // pasos/mm
+int FACTOR_MOVEMENT = 400;  // pasos/mm
 
-int GENERAL_STEP_X = 3; //mm
-int GENERAL_STEP_Y = 2; //mm
+int GENERAL_STEP_X = 3;  //mm
+int GENERAL_STEP_Y = 2;  //mm
 
 //Variables for drivers
 #define RXD2 16
@@ -65,6 +65,8 @@ HardwareSerial TMCSerial(2);
 TMC2209Stepper driver1(&TMCSerial, R_SENSE, DRIVER_ADDR_1);
 TMC2209Stepper driver2(&TMCSerial, R_SENSE, DRIVER_ADDR_2);
 
+
+bool is_process_in_execution = false;
 // -------- CONECTIVITY -----------------
 
 String device_id = "esp32_0000001";
@@ -73,10 +75,13 @@ String session_id = "1";
 const char* ssid = "INFINITUM4034_2.4";
 const char* password = "3152891132";
 
-const char* serverPath = "http://192.168.1.66:8000/basics/hello_world";
-const char* serverUrl =  "http://192.168.1.66:8000/iot/ingest/batch";
+// const char* ssid = "iPhone";
+// const char* password = "12345678";
 
-const char *nombreArchivo = "/pos.txt";
+const char* serverPath = "http://192.168.1.66:8000/basics/hello_world";
+const char* serverUrl = "http://192.168.1.66:8000/iot/ingest/batch";
+
+const char* nombreArchivo = "/pos.txt";
 
 bool is_wifi_connected;
 bool is_sd_connected;
@@ -84,12 +89,15 @@ bool is_rtc_connected;
 
 File file;
 
-int BATCH_SIZE = 50;
+int BATCH_SIZE = 10;
+
+unsigned long MyTestTimer = 0;  // variables MUST be of type unsigned long
+const byte OnBoard_LED = 2;
 
 // -------- CONECTIVITY -----------------
 
 
-struct Asociacion {//la estructura crea una relación entre cada nombre de archivo y un número
+struct Asociacion {  //la estructura crea una relación entre cada nombre de archivo y un número
   int identificador;
   String nombreArchivo;
 };
@@ -97,621 +105,685 @@ struct Asociacion {//la estructura crea una relación entre cada nombre de archi
 // Vector que contiene las asociaciones entre identificadores y nombres de archivo
 
 DateTime startTime;
-void startTimeForOut(){
-  startTime = rtc.now();                             // Momento en que comienza el período
+void startTimeForOut() {
+  startTime = rtc.now();  // Momento en que comienza el período
 }
 
 
-bool has_interval_passed(unsigned long &previousTime, unsigned long interval) {
-    unsigned long currentTime = millis();
+bool has_interval_passed(unsigned long& previousTime, unsigned long interval) {
+  unsigned long currentTime = millis();
 
-    if (currentTime - previousTime >= interval) {
-        previousTime = currentTime;
-        return true;
-    }
+  if (currentTime - previousTime >= interval) {
+    previousTime = currentTime;
+    return true;
+  }
 
-    return false;
+  return false;
+}
+
+boolean TimePeriodIsOver(unsigned long& periodStartTime, unsigned long TimePeriod) {
+  unsigned long currentMillis = millis();
+  if (currentMillis - periodStartTime >= TimePeriod) {
+    periodStartTime = currentMillis;  // set new expireTime
+    return true;                      // more time than TimePeriod) has elapsed since last time if-condition was true
+  } else return false;                // not expired
+}
+
+void BlinkHeartBeatLED(int IO_Pin, int BlinkPeriod) {
+  static unsigned long MyBlinkTimer;
+  pinMode(IO_Pin, OUTPUT);
+
+  if (TimePeriodIsOver(MyBlinkTimer, BlinkPeriod)) {
+    digitalWrite(IO_Pin, !digitalRead(IO_Pin));
+  }
 }
 
 // -------------- API ------------------------
 
 class APIEndPoint {
-  public:
-    APIEndPoint(){
-    }
-    void establishConnection(){
-      WiFi.begin(ssid, password);
+public:
+  APIEndPoint() {
+  }
+  // void establishConnection(){
+  //   WiFi.begin(ssid, password);
 
-      if (WiFi.status() != WL_CONNECTED) {
-          unsigned long start_time = millis();   
-          const unsigned long timeout = 40000;
-          
-          Serial.println("Failed while connecting to WIFI...");
+  //   if (WiFi.status() != WL_CONNECTED) {
+  //       unsigned long start_time = millis();
+  //       const unsigned long timeout = 40000;
 
-          do {
-              Serial.println("Retrying...");
-              WiFi.reconnect();            
-              delay(3000);
+  //       Serial.println("Failed while connecting to WIFI...");
 
-              if (has_interval_passed(start_time, timeout)) {
-                  Serial.println("WiFi connection timeout reached.");
-                  break;
-              }
+  //       do {
+  //           Serial.println("Retrying...");
+  //           WiFi.reconnect();
+  //           delay(3000);
 
-          } while (WiFi.status() != WL_CONNECTED);
+  //           if (has_interval_passed(start_time, timeout)) {
+  //               Serial.println("WiFi connection timeout reached.");
+  //               break;
+  //           }
 
-      }
+  //       } while (WiFi.status() != WL_CONNECTED);
 
-      verifyConnection();  
-    }
+  //   }
 
-    void verifyConnection(){
-      if (WiFi.status() == WL_CONNECTED) {
-          // Serial.println("Connected to the WiFi network");
-          // Serial.println("IP address: ");
-          // Serial.println(WiFi.localIP());
-          is_wifi_connected = true;
-      } else {
-          // Serial.println("WiFi connection failed (timeout).");
-          is_wifi_connected = false;
-      }
-    }
+  //   verifyConnection();
+  // }
 
-    bool sendDataToEndpoint(JsonDocument& doc) {
+  void establishConnection() {
+    WiFi.mode(WIFI_STA);
+    Serial.println("WiFi.mode(WIFI_STA)");
 
-      // Serial.println("Verificando conectividad WIFI");
-      // Verify conectivity before sending batch
-      verifyConnection();
-      if(!is_wifi_connected){
-        Serial.println("ERROR | FAILED | error: No WIFI connectivity found...");
-        return false;
-      }
+    int myCount = 0;
 
-      HTTPClient http;
-      http.setTimeout(20000);   // 10 segundos
-      http.begin(serverUrl);
-      http.addHeader("Content-Type", "application/json");
+    Serial.print("trying to connect to #");
+    Serial.print(ssid);
+    Serial.println("#");
+    WiFi.begin(ssid, password);
 
-      String requestBody;
-      serializeJson(doc, requestBody);
+    lcd.clear();
+    lcd.setCursor(1, 1);
+    lcd.print("trying to connect");
+    lcd.setCursor(1, 2);
+    lcd.print(ssid);
+    lcd.print("#");
 
-      int httpResponseCode = http.POST(requestBody);
+    // Wait for connection
+    while (WiFi.status() != WL_CONNECTED && myCount < 101) {
+      BlinkHeartBeatLED(OnBoard_LED, 50);  // blink LED fast during attempt to connect
+      yield();
+      if (TimePeriodIsOver(MyTestTimer, 500)) {  // once every 500 miliseconds
+        Serial.print(".");                       // print a dot
+        myCount++;
 
-      if (httpResponseCode >= 200 && httpResponseCode < 300) {
-          String response = http.getString();
-          Serial.println("INFO | API RESPONSE: " + String(httpResponseCode));
-          http.end();
-          return true;
-      } else {
-          String response = http.getString();
-          Serial.println("ERROR | API RESPONSE: " + String(httpResponseCode));
-          Serial.println("ERROR | BODY: " + response);
-          http.end();
-          return false;
-      }
-    }
-
-
-    void sendData(){
-
-      if(WiFi.status()== WL_CONNECTED){
-        HTTPClient http;  // Declare an HTTPClient object
-
-        http.begin(serverPath);  // Specify the URL
-
-        // Send HTTP GET request and get the response code
-        int httpResponseCode = http.GET();
-
-        if (httpResponseCode > 0) {
-          Serial.print("HTTP Response code: ");
-          Serial.println(httpResponseCode);
-          String payload = http.getString(); // Get the response payload
-          Serial.println(payload);           // Print the response
+        if (myCount > 100) {  // after 30 dots = 15 seconds restart
+          Serial.println();
+          Serial.print("not yet connected executing ESP.restart();");
+          lcd.clear();
+          lcd.setCursor(1, 1);
+          lcd.print("Faile while connecting");
+          lcd.setCursor(1, 2);
+          lcd.print("restarting.....");
+          delay(1000);
+          ESP.restart();
         }
-        else {
-          Serial.print("Error code: ");
-          Serial.println(httpResponseCode);
-        }
-
-        http.end();
-      }
-      else {
-        Serial.println("WiFi Disconnected");
       }
     }
 
-  private:
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("");
+      Serial.print("Connected to #");
+      Serial.print(ssid);
+      Serial.print("# IP address: ");
+      Serial.println(WiFi.localIP());
+      is_wifi_connected = true;
+
+      lcd.clear();
+      lcd.setCursor(5, 1);
+      lcd.print("Connected");
+      lcd.setCursor(2, 2);
+      lcd.print("sending files");
+
+    }
+  }
 
 
+  void verifyConnection() {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Connected to the WiFi network");
+      Serial.println("IP address: ");
+      Serial.println(WiFi.localIP());
+      is_wifi_connected = true;
+    } else {
+      Serial.println("WiFi connection failed (timeout).");
+      is_wifi_connected = false;
+    }
+  }
+
+  bool sendDataToEndpoint(JsonDocument& doc) {
+
+    // Serial.println("Verificando conectividad WIFI");
+    // Verify conectivity before sending batch
+    verifyConnection();
+    if (!is_wifi_connected) {
+      Serial.println("ERROR | FAILED | error: No WIFI connectivity found...");
+      return false;
+    }
+
+    HTTPClient http;
+    http.setTimeout(20000);  // 10 segundos
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    int httpResponseCode = http.POST(requestBody);
+
+    if (httpResponseCode >= 200 && httpResponseCode < 300) {
+      String response = http.getString();
+      Serial.println("INFO | API RESPONSE: " + String(httpResponseCode));
+      http.end();
+      return true;
+    } else {
+      String response = http.getString();
+      Serial.println("ERROR | API RESPONSE: " + String(httpResponseCode));
+      Serial.println("ERROR | BODY: " + response);
+      http.end();
+      return false;
+    }
+  }
+
+
+  void sendData() {
+
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;  // Declare an HTTPClient object
+
+      http.begin(serverPath);  // Specify the URL
+
+      // Send HTTP GET request and get the response code
+      int httpResponseCode = http.GET();
+
+      if (httpResponseCode > 0) {
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+        String payload = http.getString();  // Get the response payload
+        Serial.println(payload);            // Print the response
+      } else {
+        Serial.print("Error code: ");
+        Serial.println(httpResponseCode);
+      }
+
+      http.end();
+    } else {
+      Serial.println("WiFi Disconnected");
+    }
+  }
+
+private:
 };
 
 
 
 class SaveSensorData {
-  public:
-    String file_name;
-    String main_dir = "/iot/daily";
-    File myFile;
-    String base_name;
-    APIEndPoint ApiEndpoint;
+public:
+  String file_name;
+  String main_dir = "/iot/daily";
+  File myFile;
+  String base_name;
+  APIEndPoint ApiEndpoint;
 
-    // // establish file name
-    SaveSensorData() {
+  // // establish file name
+  SaveSensorData() {
+  }
 
-    }
 
+  void establishConnection() {
+    Serial.println("Connecting to SD...");
 
-    void establishConnection(){
-      Serial.println("Connecting to SD...");
+    if (!SD.begin(sd_chip_select)) {
+      unsigned long start_time = millis();
+      const unsigned long timeout = 10000;
 
-      if (!SD.begin(sd_chip_select)) {
-          unsigned long start_time = millis();
-          const unsigned long timeout = 10000;
+      Serial.println("Failed while connecting with SD");
 
-          Serial.println("Failed while connecting with SD");
+      do {
+        Serial.println("Retrying...");
+        delay(3000);
 
-          do {
-              Serial.println("Retrying...");
-              delay(3000);
-
-              if (has_interval_passed(start_time, timeout)) {
-                  Serial.println("SD connection timeout reached.");
-                  break;
-              }
-
-          } while (!SD.begin(sd_chip_select));
-      }
-      
-
-      verifyConnection();
-    }
-
-    void verifyConnection(){
-      if (SD.begin(sd_chip_select)) {
-          // Serial.println("SD connected successfully.");
-          is_sd_connected = true;
-      } else {
-          // Serial.println("SD connection failed.");
-          is_sd_connected = false;
-      }
-    }
-
-    void sendAllFilesInDirectory(const char *dirPath) {
-      bool file_success;
-
-      File dir = SD.open(dirPath);
-      if (!dir) {
-        Serial.println("Failed to open directory");
-        return;
-      }
-      if (!dir.isDirectory()) {
-        Serial.println("Path is not a directory");
-        dir.close();
-        return;
-      }
-
-      File entry;
-      while (true) {
-        entry = dir.openNextFile();
-        if (!entry) break; // no more files
-          String fullPath = String(dirPath) + "/" + String(entry.name());
-
-        if (!entry.isDirectory()) {
-
-          Serial.println("INFO | STARTED | Sending file: " + fullPath);
-          file_success = sendFileInBatches(fullPath);
-          if (file_success){
-            Serial.println("INFO | FINISHED | Sending file: " + fullPath);
-
-            int lastSlash = fullPath.lastIndexOf('/');
-            String fileName = fullPath.substring(lastSlash + 1);
-
-            String newPath = "/iot/saved/" + fileName;
-
-            SD.rename(fullPath, newPath);
-            SD.remove(fullPath);
-
-            // if (SD.rename(fullPath, newPath)) {
-            //     Serial.println("INFO | DONE | File moved to new directory: " + newPath);
-            // } else {
-            //     Serial.println("INFO | FAILED | File moved to new directory: " + newPath);
-            // }
-
-          }else{
-            Serial.println("ERROR | FAILED | Sending file: " + fullPath);
-          }
+        if (has_interval_passed(start_time, timeout)) {
+          Serial.println("SD connection timeout reached.");
+          break;
         }
 
+      } while (!SD.begin(sd_chip_select));
+    }
+
+
+    verifyConnection();
+  }
+
+  void verifyConnection() {
+    if (SD.begin(sd_chip_select)) {
+      // Serial.println("SD connected successfully.");
+      is_sd_connected = true;
+    } else {
+      // Serial.println("SD connection failed.");
+      is_sd_connected = false;
+    }
+  }
+
+  void sendAllFilesInDirectory(const char* dirPath) {
+    bool file_success;
+
+    File dir = SD.open(dirPath);
+    if (!dir) {
+      Serial.println("Failed to open directory");
+      return;
+    }
+    if (!dir.isDirectory()) {
+      Serial.println("Path is not a directory");
+      dir.close();
+      return;
+    }
+
+    File entry;
+    while (true) {
+      entry = dir.openNextFile();
+      if (!entry) break;  // no more files
+      String fullPath = String(dirPath) + "/" + String(entry.name());
+
+      if (!entry.isDirectory()) {
+
+        Serial.println("INFO | STARTED | Sending file: " + fullPath);
+        
+        file_success = sendFileInBatches(fullPath);
+        if (file_success) {
+          Serial.println("INFO | FINISHED | Sending file: " + fullPath);
+
+          int lastSlash = fullPath.lastIndexOf('/');
+          String fileName = fullPath.substring(lastSlash + 1);
+
+          String newPath = "/iot/saved/" + fileName;
+
+          SD.rename(fullPath, newPath);
+          SD.remove(fullPath);
+
+          // if (SD.rename(fullPath, newPath)) {
+          //     Serial.println("INFO | DONE | File moved to new directory: " + newPath);
+          // } else {
+          //     Serial.println("INFO | FAILED | File moved to new directory: " + newPath);
+          // }
+
+        } else {
+          Serial.println("ERROR | FAILED | Sending file: " + fullPath);
+        }
+      }
+
+      entry.close();
+    }
+
+    dir.close();
+  }
+
+
+
+  bool sendFileInBatches(String filePath) {
+
+
+    // verify connectivity and file existence with SD
+    verifyConnection();
+    if (!is_sd_connected) {
+      return 0;
+    }
+
+    File file = SD.open(filePath, FILE_READ);
+    if (!file) {
+      Serial.println("Error opening file");
+      return 0;
+    }
+
+
+    int seq = 0;
+
+
+    Serial.println("INFO | STARTED | Batch uploading");
+    while (file.available()) {
+
+      // Crear JSON dinámico
+      StaticJsonDocument<4096> doc;
+
+      doc["device_id"] = device_id;
+      doc["session_id"] = session_id;
+
+      String batch_id = session_id + "_" + String(seq);
+      doc["batch_id"] = batch_id;
+      doc["seq"] = seq;
+
+      JsonArray rows = doc.createNestedArray("rows");
+
+      int count = 0;
+
+      while (file.available() && count < BATCH_SIZE) {
+        String line = file.readStringUntil('\n');
+        // String lineAux = "HOla Mundo";
+        line.trim();
+        if (line.length() > 0) {
+          rows.add(line);
+          count++;
+        }
+      }
+
+      if (rows.size() > 0) {
+        bool success = sendWithRetry(doc, 10);
+
+        if (!success) {
+          delay(2000);
+          Serial.println("ERROR | FAILED | Sending Batch " + String(seq) + " to API");
+          seq++;
+          return 0;
+          // continue;  // retry same seq
+        } else {
+          Serial.println("INFO | DONE | Sending Batch " + String(seq) + " to API");
+        }
+
+        seq++;
+      }
+    }
+
+    file.close();
+    Serial.println("INFO | FINISHED | Batch uploading");
+    return 1;
+  }
+
+
+  bool sendWithRetry(JsonDocument& doc, int maxRetries = 3) {
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      if (ApiEndpoint.sendDataToEndpoint(doc)) {
+        return true;
+      }
+      Serial.println("INFO | FAILED | Retrying Batch | Attempt: " + String(attempt));
+      delay(500);
+    }
+    return 0;
+  }
+
+  bool moveFile(const String& sourcePath, const String& destinationDir) {
+
+    File sourceFile = SD.open(sourcePath, FILE_READ);
+    Serial.println(sourcePath);
+    if (!sourceFile) {
+      Serial.println("Failed to open source file");
+      return false;
+    }
+
+    if (!SD.exists("/iot/saved")) {
+      SD.mkdir("/iot/saved");
+    }
+
+    // Extract file name from path
+    int lastSlash = sourcePath.lastIndexOf('/');
+    String fileName = sourcePath.substring(lastSlash + 1);
+
+    String destinationPath = destinationDir;
+    Serial.print("File: ");
+    Serial.println(destinationPath);
+
+    File destFile = SD.open(destinationPath, FILE_WRITE);
+    if (!destFile) {
+      Serial.println("Failed to create destination file");
+      sourceFile.close();
+      return false;
+    }
+
+    // Copy content
+    while (sourceFile.available()) {
+      destFile.write(sourceFile.read());
+    }
+
+    sourceFile.close();
+    destFile.close();
+
+    // Delete original
+    if (SD.remove(sourcePath)) {
+      Serial.println("File moved successfully");
+      return true;
+    } else {
+      Serial.println("Failed to delete original file");
+      return false;
+    }
+  }
+
+  // initialize dir if not exist
+  void create(String glanularity) {
+    DateTime current_time = rtc.now();
+    base_name = obtenerNombreArchivo(current_time, glanularity) + ".csv";
+    file_name = main_dir + "/" + base_name;
+
+
+    Serial.print("Writing in file: ");
+    Serial.println(file_name);
+
+    // Make sure SD is mounted before this block (SD.begin(...))
+
+    // 1) Ensure /iot exis
+    if (!SD.exists("/iot")) {
+      Serial.println("Creating /iot ...");
+      if (!SD.mkdir("/iot")) {
+        Serial.println("ERROR: failed to create /iot");
+      }
+    }
+
+    // 2) Ensure /iot/daily exists
+    if (SD.exists("/iot")) {
+      if (!SD.exists("/iot/daily")) {
+        Serial.println("Creating /iot/daily ...");
+        if (!SD.mkdir("/iot/daily")) {
+          Serial.println("ERROR: failed to create /iot/daily");
+        }
+      }
+    }
+    // 2) Ensure /iot/daily exists
+    if (SD.exists("/iot")) {
+      if (!SD.exists("/iot/saved")) {
+        Serial.println("Creating /iot/saved ...");
+        if (!SD.mkdir("/iot/saved")) {
+          Serial.println("ERROR: failed to create /iot/daily");
+        }
+      }
+    }
+
+
+
+    // 3) Final verification
+    if (SD.exists("/iot/daily")) {
+      Serial.println("Folder /iot/daily ready ✅");
+    } else {
+      Serial.println("Folder /iot/daily NOT available ❌");
+    }
+
+    if (SD.exists(file_name)) {
+      Serial.println("Existe el archivo");
+    } else {
+      Serial.println("No existe el archivo");
+    }
+
+    myFile = SD.open(file_name, FILE_APPEND);
+  }
+
+  void write(const String& line) {
+    if (myFile) {
+      myFile.print(line);
+      // Serial.println("Wrote: " + line);
+
+    } else {
+      Serial.println("File not open!");
+    }
+  }
+
+  void close() {
+    myFile.flush();  // important to actually write to SD
+    myFile.close();
+  }
+
+  void printAll() {
+
+    File file = SD.open(file_name, FILE_READ);
+
+    Serial.println("---- FILE CONTENT ----");
+
+    while (file.available()) {
+      String line = file.readStringUntil('\n');
+      Serial.println(line);
+    }
+
+    Serial.println("---- END OF FILE ----");
+
+    file.close();
+  }
+
+  bool deleteOnlyFilesInDirectory(const char* dirPath) {
+
+    File dir = SD.open(dirPath);
+    if (!dir) {
+      Serial.println("Failed to open directory");
+      return false;
+    }
+
+    if (!dir.isDirectory()) {
+      Serial.println("Path is not a directory");
+      dir.close();
+      return false;
+    }
+
+    File entry;
+
+    while (true) {
+      entry = dir.openNextFile();
+      if (!entry) break;  // no more files
+
+      if (!entry.isDirectory()) {
+
+        String filePath = String(dirPath) + "/" + String(entry.name());
+
+        Serial.print("Deleting file: ");
+        Serial.println(filePath);
+
+        entry.close();  // IMPORTANT: close before deleting
+        SD.remove(filePath);
+      } else {
+        // It is a directory → skip it
         entry.close();
       }
-
-      dir.close();
     }
 
+    dir.close();
+
+    Serial.println("Finished deleting files.");
+    return true;
+  }
 
 
-    bool sendFileInBatches(String filePath) {
 
+private:
 
-      // verify connectivity and file existence with SD
-      verifyConnection();
-      if (!is_sd_connected){
-        return 0;
-      }
+  String obtenerNombreArchivo(DateTime fechaHora, String glanularity) {
+    String nombreArchivo = "";
+    // Construir el nombre del archivo usando los componentes de fecha y hora
+    nombreArchivo += String(fechaHora.year(), DEC);
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.month());
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.day());
+    nombreArchivo += "_";
 
-      File file = SD.open(filePath, FILE_READ);
-      if (!file) {
-        Serial.println("Error opening file");
-        return 0;
-      }
-
-
-      int seq = 0;
-
-
-      Serial.println("INFO | STARTED | Batch uploading");
-      while (file.available()) {
-
-        // Crear JSON dinámico
-        StaticJsonDocument<4096> doc;
-
-        doc["device_id"] = device_id;
-        doc["session_id"] = session_id;
-
-        String batch_id = session_id + "_" + String(seq);
-        doc["batch_id"] = batch_id;
-        doc["seq"] = seq;
-
-        JsonArray rows = doc.createNestedArray("rows");
-
-        int count = 0;
-
-        while (file.available() && count < BATCH_SIZE) {
-          String line = file.readStringUntil('\n');
-          // String lineAux = "HOla Mundo";
-          line.trim();
-          if (line.length() > 0) {
-            rows.add(line);
-            count++;
-          }
-        }
-
-        if (rows.size() > 0) {
-          bool success = sendWithRetry(doc, 10);
-
-          if (!success) {
-            delay(2000);
-            Serial.println("ERROR | FAILED | Sending Batch " + String(seq) + " to API");
-            seq++;
-            return 0;
-            // continue;  // retry same seq
-          }else{
-            Serial.println("INFO | DONE | Sending Batch " + String(seq) + " to API");
-          }
-
-          seq++;
-        }
-      }
-
-      file.close();
-      Serial.println("INFO | FINISHED | Batch uploading");
-      return 1;
+    if (glanularity == "hour") {
+      nombreArchivo += dosDigitos(fechaHora.hour());
     }
 
-
-    bool sendWithRetry(JsonDocument& doc, int maxRetries = 3) {
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
-            if (ApiEndpoint.sendDataToEndpoint(doc)) {
-                return true;
-            }
-            Serial.println("INFO | FAILED | Retrying Batch | Attempt: " + String(attempt));
-            delay(500);
-        }
-        return 0;
-    }
-
-    bool moveFile(const String &sourcePath, const String &destinationDir) {
-
-      File sourceFile = SD.open(sourcePath, FILE_READ);
-      Serial.println(sourcePath);
-      if (!sourceFile) {
-        Serial.println("Failed to open source file");
-        return false;
-      }
-
-      if (!SD.exists("/iot/saved")) {
-        SD.mkdir("/iot/saved");
-      }
-
-      // Extract file name from path
-      int lastSlash = sourcePath.lastIndexOf('/');
-      String fileName = sourcePath.substring(lastSlash + 1);
-
-      String destinationPath = destinationDir;
-      Serial.print("File: ");
-      Serial.println(destinationPath);
-
-      File destFile = SD.open(destinationPath, FILE_WRITE);
-      if (!destFile) {
-        Serial.println("Failed to create destination file");
-        sourceFile.close();
-        return false;
-      }
-
-      // Copy content
-      while (sourceFile.available()) {
-        destFile.write(sourceFile.read());
-      }
-
-      sourceFile.close();
-      destFile.close();
-
-      // Delete original
-      if (SD.remove(sourcePath)) {
-        Serial.println("File moved successfully");
-        return true;
-      } else {
-        Serial.println("Failed to delete original file");
-        return false;
-      }
-    }
-
-    // initialize dir if not exist
-    void create(String glanularity) {
-      DateTime current_time = rtc.now();
-      base_name = obtenerNombreArchivo(current_time, glanularity) + ".csv";
-      file_name = main_dir + "/" + base_name;
-
-
-      Serial.print("Writing in file: ");
-      Serial.println(file_name);
-    
-      // Make sure SD is mounted before this block (SD.begin(...))
-
-      // 1) Ensure /iot exis
-      if (!SD.exists("/iot")) {
-        Serial.println("Creating /iot ...");
-        if (!SD.mkdir("/iot")) {
-          Serial.println("ERROR: failed to create /iot");
-        }
-      }
-
-      // 2) Ensure /iot/daily exists
-      if (SD.exists("/iot")) {
-        if (!SD.exists("/iot/daily")) {
-          Serial.println("Creating /iot/daily ...");
-          if (!SD.mkdir("/iot/daily")) {
-            Serial.println("ERROR: failed to create /iot/daily");
-          }
-        }
-      }
-      // 2) Ensure /iot/daily exists
-      if (SD.exists("/iot")) {
-        if (!SD.exists("/iot/saved")) {
-          Serial.println("Creating /iot/saved ...");
-          if (!SD.mkdir("/iot/saved")) {
-            Serial.println("ERROR: failed to create /iot/daily");
-          }
-        }
-      }
-
-
-
-      // 3) Final verification
-      if (SD.exists("/iot/daily")) {
-        Serial.println("Folder /iot/daily ready ✅");
-      } else {
-        Serial.println("Folder /iot/daily NOT available ❌");
-      }
-
-      if (SD.exists(file_name)) {
-        Serial.println("Existe el archivo");
-      } else {
-        Serial.println("No existe el archivo");
-      }
-
-      myFile = SD.open(file_name, FILE_APPEND);
-
-      
-
-    }
-
-    void write(const String& line) {
-      if (myFile) {
-        myFile.print(line);
-        // Serial.println("Wrote: " + line);
-
-      } else {
-        Serial.println("File not open!");
-      }
-    }
-
-    void close(){
-      myFile.flush();  // important to actually write to SD
-      myFile.close();
-    }
-
-    void printAll() {
-
-      File file = SD.open(file_name, FILE_READ);
-
-      Serial.println("---- FILE CONTENT ----");
-
-      while (file.available()) {
-        String line = file.readStringUntil('\n');
-        Serial.println(line);
-      }
-
-      Serial.println("---- END OF FILE ----");
-
-      file.close();
-    }
-
-    bool deleteOnlyFilesInDirectory(const char *dirPath) {
-
-      File dir = SD.open(dirPath);
-      if (!dir) {
-        Serial.println("Failed to open directory");
-        return false;
-      }
-
-      if (!dir.isDirectory()) {
-        Serial.println("Path is not a directory");
-        dir.close();
-        return false;
-      }
-
-      File entry;
-
-      while (true) {
-        entry = dir.openNextFile();
-        if (!entry) break;   // no more files
-
-        if (!entry.isDirectory()) {
-
-          String filePath = String(dirPath) + "/" + String(entry.name());
-
-          Serial.print("Deleting file: ");
-          Serial.println(filePath);
-
-          entry.close();          // IMPORTANT: close before deleting
-          SD.remove(filePath);
-        }
-        else {
-          // It is a directory → skip it
-          entry.close();
-        }
-      }
-
-      dir.close();
-
-      Serial.println("Finished deleting files.");
-      return true;
-    }
-
-
-
-  private: 
-
-    String obtenerNombreArchivo(DateTime fechaHora, String glanularity) {
-      String nombreArchivo = "";
-      // Construir el nombre del archivo usando los componentes de fecha y hora
-      nombreArchivo += String(fechaHora.year(), DEC);
+    if (glanularity == "min") {
+      nombreArchivo += dosDigitos(fechaHora.hour());
       nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.month());
+      nombreArchivo += dosDigitos(fechaHora.minute());
+    }
+
+    if (glanularity == "sec") {
+      nombreArchivo += dosDigitos(fechaHora.hour());
       nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.day());
-      nombreArchivo += "_";
-
-      if (glanularity == "hour"){
-        nombreArchivo += dosDigitos(fechaHora.hour());
-      }
-
-      if (glanularity == "min"){
-        nombreArchivo += dosDigitos(fechaHora.hour());
-        nombreArchivo += "-";
-        nombreArchivo += dosDigitos(fechaHora.minute());
-      }
-
-      if (glanularity == "sec"){
-        nombreArchivo += dosDigitos(fechaHora.hour());
-        nombreArchivo += "-";
-        nombreArchivo += dosDigitos(fechaHora.minute());
-        nombreArchivo += "-";
-        nombreArchivo += dosDigitos(fechaHora.second());
-      }
-
-      return nombreArchivo;
+      nombreArchivo += dosDigitos(fechaHora.minute());
+      nombreArchivo += "-";
+      nombreArchivo += dosDigitos(fechaHora.second());
     }
 
-    String dosDigitos(int numero) {
-      if (numero < 10) {
-        return "0" + String(numero);
-      } else {
-        return String(numero);
-      }
-    }
+    return nombreArchivo;
+  }
 
+  String dosDigitos(int numero) {
+    if (numero < 10) {
+      return "0" + String(numero);
+    } else {
+      return String(numero);
+    }
+  }
 };
 
 
 
 class TimeManager {
-  public:
-    int current_day = -1;
-    DateTime started_time;
+public:
+  int current_day = -1;
+  DateTime started_time;
 
-    TimeManager(){
-      }
+  TimeManager() {
+  }
 
-    void establishConnection(){
-      Serial.println("Connecting to RTC module...");
-      if (!rtc.begin()) {
+  void establishConnection() {
+    Serial.println("Connecting to RTC module...");
+    if (!rtc.begin()) {
 
-          unsigned long start_time = millis();
-          const unsigned long timeout = 10000;
+      unsigned long start_time = millis();
+      const unsigned long timeout = 10000;
 
-          Serial.println("Failed while connecting with RTC module...");
+      Serial.println("Failed while connecting with RTC module...");
 
-          do {
-              Serial.println("Retrying...");
-              delay(3000);
+      do {
+        Serial.println("Retrying...");
+        delay(3000);
 
-              if (has_interval_passed(start_time, timeout)) {
-                  Serial.println("RTC connection timeout reached.");
-                  break;
-              }
+        if (has_interval_passed(start_time, timeout)) {
+          Serial.println("RTC connection timeout reached.");
+          break;
+        }
 
-          } while (!rtc.begin());
-      }
+      } while (!rtc.begin());
+    }
 
-      if (rtc.begin()) {
+    if (rtc.begin()) {
       started_time = rtc.now();
-      }
-      verifyConnection();
     }
+    verifyConnection();
+  }
 
-    void verifyConnection(){
-      if (rtc.begin()) {
-          Serial.println("RTC connected successfully.");
-          // rtc.adjust(DateTime(__DATE__,__TIME__));
-          is_rtc_connected = true;
+  void verifyConnection() {
+    if (rtc.begin()) {
+      Serial.println("RTC connected successfully.");
+      // rtc.adjust(DateTime(__DATE__,__TIME__));
+      is_rtc_connected = true;
 
-      } else {
-          Serial.println("RTC connection failed.");
-          is_rtc_connected = false;
-      }
+    } else {
+      Serial.println("RTC connection failed.");
+      is_rtc_connected = false;
     }
+  }
 
-    bool everyCertainMinutes(int minutes){
-      DateTime current_time = rtc.now();
+  bool everyCertainMinutes(int minutes) {
+    DateTime current_time = rtc.now();
 
-      if ((current_time.unixtime() - started_time.unixtime() >= minutes*60)){
-        started_time = rtc.now();
+    if ((current_time.unixtime() - started_time.unixtime() >= minutes * 60)) {
+      started_time = rtc.now();
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  bool isSpecificTime(int targetHour, int targetMinute) {
+
+
+    if (is_rtc_connected) {
+      DateTime now = rtc.now();
+      if (now.hour() == targetHour && now.minute() == targetMinute && current_day != now.day()) {
+        current_day = now.day();
+
         return true;
-      }else{
+      } else {
         return false;
       }
     }
+  }
 
-    bool isSpecificTime(int targetHour, int targetMinute){
-
-      
-      if (is_rtc_connected){
-        DateTime now = rtc.now();
-        if (now.hour() == targetHour && now.minute() == targetMinute && current_day != now.day()){
-          current_day = now.day();
-
-          return true;
-        } else{
-          return false;
-        }
-      }
-
-    }
-
-  private:
-
+private:
 };
 
 APIEndPoint ApiEndpoint;
@@ -721,175 +793,171 @@ TimeManager Time2;
 File root;
 
 
-class Files{
-  private:
-  const char *nombreArchivo = "/pos.txt";
-  int num_archivos=0;
+class Files {
+private:
+  const char* nombreArchivo = "/pos.txt";
+  int num_archivos = 0;
 
-  public:
+public:
 
-    std::vector<Asociacion> asociaciones;
+  std::vector<Asociacion> asociaciones;
 
-    String fileSelected = "";
+  String fileSelected = "";
 
-    const char *posFile = "/pos.txt";
-    const char *fileName = "/fileName.txt";
-    int stepNumber=0;
-    volatile int AUX_STEPS_X = 0;
-    volatile int AUX_STEPS_Y = 0;
-  
+  const char* posFile = "/pos.txt";
+  const char* fileName = "/fileName.txt";
+  int stepNumber = 0;
+  volatile int AUX_STEPS_X = 0;
+  volatile int AUX_STEPS_Y = 0;
 
-    volatile int getAUX_STEPS_X(){
-      return AUX_STEPS_X;
+
+  volatile int getAUX_STEPS_X() {
+    return AUX_STEPS_X;
+  }
+  volatile int getAUX_STEPS_Y() {
+    return AUX_STEPS_Y;
+  }
+
+  void saveNameFile() {
+    File file = SD.open(fileName, FILE_WRITE);
+
+    if (file) {
+      file.seek(0);
+      file.print(fileSelected);
+      file.close();
+      Serial.println("Contenido del archivo guardado correctamente.");
+    } else {
+      Serial.println("¡Error al abrir el archivo!");
     }
-    volatile int getAUX_STEPS_Y(){
-      return AUX_STEPS_Y;
+  }
+  String getNameFile() {
+    File file = SD.open(fileName);
+    if (file) {
+      while (file.available()) {
+        fileSelected += (char)file.read();
+      }
+      file.close();
+      Serial.println("Configuración leída correctamente.");
+      return fileSelected;
+    } else {
+      Serial.println("Archivo de configuración no encontrado. Usando valores predeterminados.");
     }
+  }
 
-    void saveNameFile(){
-      File file = SD.open(fileName, FILE_WRITE);
 
-      if (file) {
-        file.seek(0);
-        file.print(fileSelected);
-        file.close();
-        Serial.println("Contenido del archivo guardado correctamente.");
-      } else {
-        Serial.println("¡Error al abrir el archivo!");
+  void sendFileName(String fileName) {
+    fileSelected = fileName;
+  }
+
+  void selectLastFile() {
+    if (getNameFile() == "") {  //si no hay un archivo seleccionado, selecciona el último que se guardo
+      fileAssociations();
+      fileSelected = getFileName(num_archivos - 1);  // Del número de archivos contados se queda con el último
+
+      processData(fileSelected);
+    } else {                      //si hay un arhivo seleccionado, obtiene los datos de él
+      processData(fileSelected);  //recupera los datos del archivo seleccionado
+    }
+  }
+
+  void fileAssociations() {  //se crea una relación de números 1-1 a los nombres de archivos de los programas
+    // Abrir el directorio raíz
+    File directorio = SD.open("/");
+    // Si el directorio se abre correctamente
+    num_archivos = 0;
+    if (directorio) {
+      while (true) {
+        // Abrir el siguiente archivo
+        File archivo = directorio.openNextFile();
+        Asociacion aux;
+
+        // Si no hay más archivos, salir del bucle
+        if (!archivo) {
+          break;
+        }
+
+        // Imprimir el nombre del archivo
+        //Serial.println(archivo.name());
+
+        // Agregar una nueva asociación al final del vector
+        aux = { num_archivos, archivo.name() };
+        asociaciones.insert(asociaciones.begin(), aux);
+
+        //asociaciones.push_back({num_archivos, archivo.name()});
+
+        // Cerrar el archivo
+        archivo.close();
+        num_archivos = num_archivos + 1;
       }
 
-    }
-    String getNameFile(){
-       File file = SD.open(fileName);
-      if (file) {
-        while(file.available()) {
-          fileSelected += (char)file.read();
-        }
-        file.close();
-        Serial.println("Configuración leída correctamente.");
-        return fileSelected;
-      } else {
-        Serial.println("Archivo de configuración no encontrado. Usando valores predeterminados.");
-      }
-    }
-    
-
-    void sendFileName(String fileName){
-      fileSelected = fileName;
-    }
-
-    void selectLastFile(){
-      if(getNameFile() == ""){//si no hay un archivo seleccionado, selecciona el último que se guardo
-          fileAssociations();
-          fileSelected = getFileName(num_archivos-1); // Del número de archivos contados se queda con el último
-
-          processData(fileSelected); 
-        }else{//si hay un arhivo seleccionado, obtiene los datos de él
-          processData(fileSelected); //recupera los datos del archivo seleccionado
-
-        }
-    }
-
-    void fileAssociations(){//se crea una relación de números 1-1 a los nombres de archivos de los programas
-      // Abrir el directorio raíz
-      File directorio = SD.open("/");
-      // Si el directorio se abre correctamente
-      num_archivos = 0;
-      if (directorio) {
-        while (true) {  
-          // Abrir el siguiente archivo
-          File archivo = directorio.openNextFile();
-          Asociacion aux;
-          
-          // Si no hay más archivos, salir del bucle
-          if (!archivo) {
-            break;
-          }
-          
-          // Imprimir el nombre del archivo
-          //Serial.println(archivo.name());
-                          
-          // Agregar una nueva asociación al final del vector
-          aux = {num_archivos,archivo.name()};
-          asociaciones.insert(asociaciones.begin(), aux);
-
-          //asociaciones.push_back({num_archivos, archivo.name()});
-          
-          // Cerrar el archivo
-          archivo.close();
-          num_archivos = num_archivos + 1;
-        }
-        
-        // Cerrar el directorio
-        directorio.close();
+      // Cerrar el directorio
+      directorio.close();
 
       // Iterar sobre las asociaciones y mostrarlas en la consola
       //for (const auto& asociacion : asociaciones) {
       //  lcd.setCursor(contador_1+1, 0);
       //  lcd.print(asociacion.nombreArchivo);
       //}
-      } else {
-        // Si no se puede abrir el directorio
-        Serial.println("Error al abrir el directorio raíz.");
+    } else {
+      // Si no se puede abrir el directorio
+      Serial.println("Error al abrir el directorio raíz.");
+    }
+  }
+
+
+  String getStringName(DateTime fechaHora) {
+    String nombreArchivo = "";
+    // Construir el nombre del archivo usando los componentes de fecha y hora
+    nombreArchivo += String(fechaHora.year(), DEC);
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.month());
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.day());
+    nombreArchivo += "_";
+    nombreArchivo += dosDigitos(fechaHora.hour());
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.minute());
+    nombreArchivo += "-";
+    nombreArchivo += dosDigitos(fechaHora.second());
+
+    return nombreArchivo;
+  }
+
+  String getFileName(int identificador) {
+    for (const auto& asociacion : asociaciones) {
+      if (asociacion.identificador == identificador) {
+        return asociacion.nombreArchivo;
       }
+    }
+    // Si no se encuentra ninguna asociación para el identificador dado
+    return "";
+  }
+  int getstepNumber() {
+    return stepNumber;
+  }
+  void processData(String nombreArchivo) {
+    File archivo = SD.open("/" + nombreArchivo);
 
-
-    } 
-
-
-    String getStringName(DateTime fechaHora) {
-      String nombreArchivo = "";
-      // Construir el nombre del archivo usando los componentes de fecha y hora
-      nombreArchivo += String(fechaHora.year(), DEC);
-      nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.month());
-      nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.day());
-      nombreArchivo += "_";
-      nombreArchivo += dosDigitos(fechaHora.hour());
-      nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.minute());
-      nombreArchivo += "-";
-      nombreArchivo += dosDigitos(fechaHora.second());
-
-      return nombreArchivo;
+    if (!archivo) {
+      Serial.println("Error al abrir el archivo.");
+      return;
     }
 
-    String getFileName(int identificador) {
-      for (const auto& asociacion : asociaciones) {
-        if (asociacion.identificador == identificador) {
-          return asociacion.nombreArchivo;
-        }
-      }
-      // Si no se encuentra ninguna asociación para el identificador dado
-      return "";
-    }
-    int getstepNumber(){
-      return stepNumber;
-    }
-    void processData(String nombreArchivo) { 
-      File archivo = SD.open("/"+nombreArchivo);
+    Serial.println("Leyendo datos del archivo:");
 
-      if (!archivo) {
-        Serial.println("Error al abrir el archivo.");
-        return;
-      }
-
-      Serial.println("Leyendo datos del archivo:");
-
-      // Leer cada línea del archivo
-      int contador = 0;
-      int aux=0;
-      while (archivo.available()) {
-        String linea = archivo.readStringUntil('\n'); // Leer una línea del archivo
-        // Extraer los números de la línea
-        X[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
-        linea.remove(0, linea.indexOf(' ') + 1); // Eliminar la parte ya leída de la línea
-        Y[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
-        linea.remove(0, linea.indexOf(' ') + 1);
-        MINUTOS[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
-        linea.remove(0, linea.indexOf(' ') + 1);
-        SEGUNDOS[contador] = linea.toInt();
+    // Leer cada línea del archivo
+    int contador = 0;
+    int aux = 0;
+    while (archivo.available()) {
+      String linea = archivo.readStringUntil('\n');  // Leer una línea del archivo
+      // Extraer los números de la línea
+      X[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
+      linea.remove(0, linea.indexOf(' ') + 1);  // Eliminar la parte ya leída de la línea
+      Y[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
+      linea.remove(0, linea.indexOf(' ') + 1);
+      MINUTOS[contador] = linea.substring(0, linea.indexOf(' ')).toInt();
+      linea.remove(0, linea.indexOf(' ') + 1);
+      SEGUNDOS[contador] = linea.toInt();
 
 
       /*
@@ -902,871 +970,858 @@ class Files{
         Serial.print(MINUTOS[contador]);
         Serial.print(", Columna 4: ");
         Serial.println(SEGUNDOS[contador]);
-      */  
-        if(X[contador]==0 && Y[contador]==0 && MINUTOS[contador]==0 && SEGUNDOS[contador]==0 && aux==0){
-          stepNumber = contador+1;
-          aux=1;
-        }
-        contador = contador + 1;
-
+      */
+      if (X[contador] == 0 && Y[contador] == 0 && MINUTOS[contador] == 0 && SEGUNDOS[contador] == 0 && aux == 0) {
+        stepNumber = contador + 1;
+        aux = 1;
       }
-
-      archivo.close(); // Cerrar el archivo
+      contador = contador + 1;
     }
 
-    void readPreviousSteps() { //Lee la posición guardada x y de los motores
-      Serial.println("Leyendo configuración desde la tarjeta SD...");
+    archivo.close();  // Cerrar el archivo
+  }
 
-      // Abre el archivo en modo de lectura
-      File file = SD.open(posFile);
-      if (file) {
-        // Lee las posiciones desde el archivo
-        AUX_STEPS_X = file.parseInt();
-        AUX_STEPS_Y = file.parseInt();
+  void readPreviousSteps() {  //Lee la posición guardada x y de los motores
+    Serial.println("Leyendo configuración desde la tarjeta SD...");
 
-        // Cierra el archivo
-        file.close();
-        Serial.println("Configuración leída correctamente.");
-      } else {
-        Serial.println("Archivo de configuración no encontrado. Usando valores predeterminados.");
-      }
+    // Abre el archivo en modo de lectura
+    File file = SD.open(posFile);
+    if (file) {
+      // Lee las posiciones desde el archivo
+      AUX_STEPS_X = file.parseInt();
+      AUX_STEPS_Y = file.parseInt();
+
+      // Cierra el archivo
+      file.close();
+      Serial.println("Configuración leída correctamente.");
+    } else {
+      Serial.println("Archivo de configuración no encontrado. Usando valores predeterminados.");
     }
+  }
 
-    void saveStep(int x, int y, int minutos, int segundos, int stepNumber){
-      X[stepNumber]=x;
-      Y[stepNumber]=y;
-      MINUTOS[stepNumber]=minutos;
-      SEGUNDOS[stepNumber]=segundos;
+  void saveStep(int x, int y, int minutos, int segundos, int stepNumber) {
+    X[stepNumber] = x;
+    Y[stepNumber] = y;
+    MINUTOS[stepNumber] = minutos;
+    SEGUNDOS[stepNumber] = segundos;
+  }
+
+  void savePos(int AUX_STEPS_X, int AUX_STEPS_Y) {  //Guarda la posición x y de los motores
+
+    // Abre el archivo en modo de lectura y escritura
+    File file = SD.open(nombreArchivo, FILE_WRITE);
+    if (file) {
+      // Posiciona el puntero de escritura al principio del archivo
+      file.seek(0);
+
+      // Sobrescribe los valores existentes
+      file.print(AUX_STEPS_X);
+      file.print('\n');
+      file.print(AUX_STEPS_Y);
+
+      // Trunca el archivo para eliminar cualquier contenido adicional
+      // Cierra y vuelve a abrir el archivo en modo de escritura para truncar
+      file.close();
+
+    } else {
+      Serial.println("Error al abrir el archivo para guardar configuración.");
     }
-
-    void savePos(int AUX_STEPS_X, int AUX_STEPS_Y) { //Guarda la posición x y de los motores
-
-      // Abre el archivo en modo de lectura y escritura
-      File file = SD.open(nombreArchivo, FILE_WRITE);
-      if (file) {
-        // Posiciona el puntero de escritura al principio del archivo
-        file.seek(0);
-
-        // Sobrescribe los valores existentes
-        file.print(AUX_STEPS_X);
-        file.print('\n');
-        file.print(AUX_STEPS_Y);
-
-        // Trunca el archivo para eliminar cualquier contenido adicional
-        // Cierra y vuelve a abrir el archivo en modo de escritura para truncar
-        file.close();
-
-      } else {
-        Serial.println("Error al abrir el archivo para guardar configuración.");
-      }
-    }
-
-
-    void saveMode(){
-      DateTime inicio = rtc.now();
-      fileSelected = getStringName(inicio)+".txt";
-      
-      // Abrir el archivo en modo escritura
-      File archivo = SD.open("/"+fileSelected, FILE_WRITE);
-      if (archivo) {
-        // Escribir cada elemento del arreglo en el archivo
-        for (int i = 0; i < sizeof(X) / sizeof(X[0]); i++) {
-          archivo.print(X[i]);
-          archivo.print(' '); // Nueva línea
-          archivo.print(Y[i]);
-          archivo.print(' '); // Nueva línea
-          archivo.print(MINUTOS[i]);
-          archivo.print(' '); // Nueva línea
-          archivo.print(SEGUNDOS[i]);
-          archivo.print('\n'); // Nueva línea
-        }
-
-        archivo.close(); // Cerrar el archivo
-        lcd.clear();
-        lcd.setCursor(2, 1);
-        lcd.print("GUARDADO EXITOSO");
-      } else {
-        // Si no se pudo abrir el archivo
-        lcd.setCursor(2, 1);
-        lcd.print("ERROR AL GUARDAR.");
-      }
-        delay(2000);
-
-        lcd.clear();
-
-    }
-
-
-    String dosDigitos(int numero) {
-      if (numero < 10) {
-        return "0" + String(numero);
-      } else {
-        return String(numero);
-      }
-    }
-
-};
-
-class Encoder{
-  private:
-    unsigned long ultimoTiempo = 0;
-    unsigned long debounceDelay = 300; // Tiempo de debounce en milisegundos
-
-  public:
-    int aux=2;
-    bool bol = 0;
-    bool aux_submenu = 0;
-    volatile int AUX_STEPS_X = 0;
-    volatile int AUX_POS_A=0;
-    volatile int AUX_STEPS_Y = 0;
-    volatile int POS_A = 0;      // variable POS_A con valor inicial de 50 y definida
-    volatile int POS_B = 0;
-    volatile int AUX_POS_A2 = 0;
-    volatile int STEPSX=0;
-    volatile int STEPSY=0;
-    //Counters for movements of stepper motors
-
-    int AUX_STEPSX;
-    int AUX_STEPSY;
-
-
-    bool PUSH_A=0;
-    bool PUSH_B=0;
-    volatile int limit_POS_A;
-    volatile int limit_POS_B;
-
-
-    void setToZero(){
-      POS_A=0;
-      STEPSX=0;
-      STEPSY=0;
-      POS_B=0;
-      AUX_POS_A=0;
-    }
-    void sendPUSH_A(int value){
-      PUSH_A=value;
-    }
-    void sendPUSH_B(int value){
-      PUSH_B=value;
-    }
-    void sendSTEPSX(volatile int value){
-      STEPSX = value;
-    }
-    void sendSTEPSY(volatile int value){
-      STEPSY = value;
-    }
-    void sendSTEPSY(){
-
-    }
-
-    void restoreData(volatile int value1,volatile int value2,volatile int value3,volatile int value4){
-      POS_A=value1;
-      POS_B=value2;
-      STEPSX=value3;
-      STEPSY=value4;
-      
-    }
-    
-    int getSTEPSX(){
-      return STEPSX;
-    }
-    int getSTEPSY(){
-      return STEPSY;
-    }
-    bool getPUSH_B(){
-      return PUSH_B;
-    }
-    bool getPUSH_A(){
-      return PUSH_A;
-    }
-    void savePOS_A(volatile int aux){
-      POS_A = aux;
-    }
-    void saveAUX_POS_A(volatile int aux){
-      AUX_POS_A = aux;
-    }
-
-    void savelimit_POS_A(volatile int aux){
-      limit_POS_A = aux;
-    }
-    void savelimit_POS_B(volatile int aux){
-      limit_POS_B = aux;
-    }
-    volatile int getPOS_A(){
-      return POS_A;
-    }
-    volatile int getPOS_B(){
-      return POS_B;
-    }
-    void eraseValues(){
-      bol = 0;
-      POS_A = 0;
-      AUX_POS_A = 0;   
-    }
-    bool getBol(){
-      return bol;
-    }
-    volatile int getAUX_POS_A(){
-      return AUX_POS_A;
-
-    }
-
-    void encoder1(){
-      static unsigned long ultimaInterrupcion = 0;  // variable static con ultimo valor de // tiempo de interrupcion
-      unsigned long tiempoInterrupcion = millis();  // variable almacena valor de func. millis
-
-      if (tiempoInterrupcion - ultimaInterrupcion > 5) {  // rutina antirebote desestima  // pulsos menores a 5 mseg.
-        if (digitalRead(DT_A) == HIGH)                    // si B es HIGH, sentido horario
-        {
-          POS_A++;  // incrementa POS_A en 1
-          STEPSX = STEPSX + GENERAL_STEP_X;
-        } else {    // si B es LOW, senti anti horario
-          POS_A--;  // decrementa POS_A en 1
-          STEPSX = STEPSX - GENERAL_STEP_X;
-        }
-
-      POS_A = min(limit_POS_A,max(0, POS_A));
-      STEPSX = min(15000, max(0, STEPSX));  // establece limite inferior de 0 y
-
-      ultimaInterrupcion = tiempoInterrupcion;  // guarda valor actualizado del tiempo
-      }     
-    
-
-    }
-    void encoder2(){
-      static unsigned long ultimaInterrupcion = 0;  // variable static con ultimo valor de // tiempo de interrupcion
-      unsigned long tiempoInterrupcion = millis();  // variable almacena valor de func. millis
-
-      if (tiempoInterrupcion - ultimaInterrupcion > 5) {  // rutina antirebote desestima // pulsos menores a 5 mseg.
-        if (digitalRead(DT_B) == HIGH)                    // si B es HIGH, sentido horario
-        {
-          POS_B++;  // incrementa POS_A en 1
-          STEPSY = STEPSY + GENERAL_STEP_Y;
-        } else {        // si B es LOW, senti anti horario
-          POS_B--;  // decrementa POS_A en 1
-          STEPSY = STEPSY - GENERAL_STEP_Y;
-        }
-
-
-        POS_B = min(limit_POS_B, max(0, POS_B));  // establece limite inferior de 0 y
-        STEPSY = min(10000, max(0, STEPSY));      // establece limite inferior de 0 y
-
-        //savesteps();
-        // superior de 100 para POS_A
-        ultimaInterrupcion = tiempoInterrupcion;  // guarda valor actualizado del tiempo
-
-
-      }  // de la interrupcion en variable static
-
-      
-    }  
-
-    void push_a(){
-      //Variable la cual hará que en determinado menú, nos regresemos al AUX_PRINT_A
-      if (millis() - ultimoTiempo > debounceDelay) {
-        // Actualiza el tiempo del último cambio del botón
-        ultimoTiempo = millis();
-        if (digitalRead(BUTTON_B) == LOW) {
-          Serial.println("FUNCIONA_B");
-          PUSH_B=1;
-
-          // Espera hasta que pase el intervalo
-        }
-      }
-    }
-
-  
-
-    
-    void push_b(){
-
-      if (millis() - ultimoTiempo > debounceDelay) {
-        // Actualiza el tiempo del último cambio del botón
-        ultimoTiempo = millis();
-        if (digitalRead(BUTTON_A) == LOW) {
-          Serial.println("FUNCIONA_A");
-          PUSH_A = 1; 
-        }
-      }
-    }
-    
-    int max(int num1, int num2) {
-      if (num1 > num2) {
-        return num1;
-      } else {
-        return num2;
-      }
-    }
-
-    int min(int num1, int num2) {
-      if (num1 > num2) {
-        return num2;
-      } else {
-        return num1;
-      }
-    }
-
-                
-
-};
-
-class Values {
-  public:
-    int STEPSX, STEPSY;
-    int POS_A, POS_B;
-    
-    virtual void saveData(Encoder& EncoderObject){
-    }
-    virtual void restoreData(Encoder& EncoderObject){
-
-    }
-};
-
-
-class MotorMovement: public Values{ 
-  private:
-  public:
-    volatile int POS_A;
-    volatile int POS_B;
-    volatile int STEPSX;
-    volatile int STEPSY;
-
-    volatile int getPOS_A(){
-      return POS_A;
-    }
-    volatile int getPOS_B(){
-      return POS_B;
-    }
-    volatile int getSTEPSX(){
-      return STEPSX;
-    }
-    volatile int getSTEPSY(){
-      return STEPSY;
-    }
-
-    void saveData(Encoder& EncoderObject) override{
-      POS_A=EncoderObject.getPOS_A();
-      POS_B=EncoderObject.getPOS_B();
-      STEPSX=EncoderObject.getSTEPSX();
-      STEPSY=EncoderObject.getSTEPSY();
-    }
-
-    void restoreData(Encoder& EncoderObject) override{
-      EncoderObject.restoreData(POS_A,POS_B,STEPSX,STEPSY);
-    }
-
-    void stepMotor_y(int mm, int intervalUs) {
-      int steps = mm*FACTOR_MOVEMENT;
-      for (int i = 0; i < steps; i++) {
-        digitalWrite(PULY, HIGH);
-        delayMicroseconds(10);      // pulso seguro
-        digitalWrite(PULY, LOW);
-        delayMicroseconds(intervalUs);
-      
-      }
-    }
-
-    void stepMotor_x(int mm, int intervalUs) {
-      int steps = mm*FACTOR_MOVEMENT;
-      for (int i = 0; i < steps; i++) {
-        digitalWrite(PULX, HIGH);
-        delayMicroseconds(10);      // pulso seguro
-        digitalWrite(PULX, LOW);
-        delayMicroseconds(intervalUs);
-      
-      }
-    }
-
-    void moveFromTo(Files& FilesObject,int AUX_STEPS_X, int AUX_STEPS_Y, int STEPSX, int STEPSY) {
-      //Movimiento de motores y
-
-      while (AUX_STEPS_Y < STEPSY) {
-        digitalWrite(DIRY, HIGH);
-        stepMotor_y(GENERAL_STEP_Y, 150);
-        AUX_STEPS_Y += GENERAL_STEP_Y;
-
-        DataWriter.create("hour");
-        printDriverYInfo("Driver 1 Info");
-        DataWriter.close();
-      }
-
-      while (AUX_STEPS_Y > STEPSY) {
-        digitalWrite(DIRY, LOW);
-        stepMotor_y(GENERAL_STEP_Y, 150);
-        AUX_STEPS_Y -= GENERAL_STEP_Y;
-
-        DataWriter.create("hour");
-        printDriverYInfo("Driver 1 Info");
-        DataWriter.close();
-      }
-      while (AUX_STEPS_X < STEPSX) {
-        digitalWrite(DIRX, HIGH);
-        stepMotor_x(GENERAL_STEP_X, 150);
-        AUX_STEPS_X += GENERAL_STEP_X;
-
-        DataWriter.create("hour");
-        printDriverXInfo("Driver 2 Info");
-        DataWriter.close();
-      }
-
-      while (AUX_STEPS_X > STEPSX) {
-        digitalWrite(DIRX, LOW);
-        stepMotor_x(GENERAL_STEP_X, 150);
-        AUX_STEPS_X -= GENERAL_STEP_X;
-
-        DataWriter.create("hour");
-        printDriverXInfo("Driver 2 Info");
-        DataWriter.close();
-      }
-
-
-      // if (Time.everyCertainMinutes(10)){
-      //   DataWriter.sendAllFilesInDirectory("/iot/daily");
-      // }
-
-      FilesObject.savePos(AUX_STEPS_X,AUX_STEPS_Y);
-
   }
 
 
+  void saveMode() {
+    DateTime inicio = rtc.now();
+    fileSelected = getStringName(inicio) + ".txt";
+
+    // Abrir el archivo en modo escritura
+    File archivo = SD.open("/" + fileSelected, FILE_WRITE);
+    if (archivo) {
+      // Escribir cada elemento del arreglo en el archivo
+      for (int i = 0; i < sizeof(X) / sizeof(X[0]); i++) {
+        archivo.print(X[i]);
+        archivo.print(' ');  // Nueva línea
+        archivo.print(Y[i]);
+        archivo.print(' ');  // Nueva línea
+        archivo.print(MINUTOS[i]);
+        archivo.print(' ');  // Nueva línea
+        archivo.print(SEGUNDOS[i]);
+        archivo.print('\n');  // Nueva línea
+      }
+
+      archivo.close();  // Cerrar el archivo
+      lcd.clear();
+      lcd.setCursor(2, 1);
+      lcd.print("GUARDADO EXITOSO");
+    } else {
+      // Si no se pudo abrir el archivo
+      lcd.setCursor(2, 1);
+      lcd.print("ERROR AL GUARDAR.");
+    }
+    delay(2000);
+
+    lcd.clear();
+  }
+
+
+  String dosDigitos(int numero) {
+    if (numero < 10) {
+      return "0" + String(numero);
+    } else {
+      return String(numero);
+    }
+  }
+};
+
+class Encoder {
+private:
+  unsigned long ultimoTiempo = 0;
+  unsigned long debounceDelay = 300;  // Tiempo de debounce en milisegundos
+
+public:
+  int aux = 2;
+  bool bol = 0;
+  bool aux_submenu = 0;
+  volatile int AUX_STEPS_X = 0;
+  volatile int AUX_POS_A = 0;
+  volatile int AUX_STEPS_Y = 0;
+  volatile int POS_A = 0;  // variable POS_A con valor inicial de 50 y definida
+  volatile int POS_B = 0;
+  volatile int AUX_POS_A2 = 0;
+  volatile int STEPSX = 0;
+  volatile int STEPSY = 0;
+  //Counters for movements of stepper motors
+
+  int AUX_STEPSX;
+  int AUX_STEPSY;
+
+
+  bool PUSH_A = 0;
+  bool PUSH_B = 0;
+  volatile int limit_POS_A;
+  volatile int limit_POS_B;
+
+
+  void setToZero() {
+    POS_A = 0;
+    STEPSX = 0;
+    STEPSY = 0;
+    POS_B = 0;
+    AUX_POS_A = 0;
+  }
+  void sendPUSH_A(int value) {
+    PUSH_A = value;
+  }
+  void sendPUSH_B(int value) {
+    PUSH_B = value;
+  }
+  void sendSTEPSX(volatile int value) {
+    STEPSX = value;
+  }
+  void sendSTEPSY(volatile int value) {
+    STEPSY = value;
+  }
+  void sendSTEPSY() {
+  }
+
+  void restoreData(volatile int value1, volatile int value2, volatile int value3, volatile int value4) {
+    POS_A = value1;
+    POS_B = value2;
+    STEPSX = value3;
+    STEPSY = value4;
+  }
+
+  int getSTEPSX() {
+    return STEPSX;
+  }
+  int getSTEPSY() {
+    return STEPSY;
+  }
+  bool getPUSH_B() {
+    return PUSH_B;
+  }
+  bool getPUSH_A() {
+    return PUSH_A;
+  }
+  void savePOS_A(volatile int aux) {
+    POS_A = aux;
+  }
+  void saveAUX_POS_A(volatile int aux) {
+    AUX_POS_A = aux;
+  }
+
+  void savelimit_POS_A(volatile int aux) {
+    limit_POS_A = aux;
+  }
+  void savelimit_POS_B(volatile int aux) {
+    limit_POS_B = aux;
+  }
+  volatile int getPOS_A() {
+    return POS_A;
+  }
+  volatile int getPOS_B() {
+    return POS_B;
+  }
+  void eraseValues() {
+    bol = 0;
+    POS_A = 0;
+    AUX_POS_A = 0;
+  }
+  bool getBol() {
+    return bol;
+  }
+  volatile int getAUX_POS_A() {
+    return AUX_POS_A;
+  }
+
+  void encoder1() {
+    static unsigned long ultimaInterrupcion = 0;  // variable static con ultimo valor de // tiempo de interrupcion
+    unsigned long tiempoInterrupcion = millis();  // variable almacena valor de func. millis
+
+    if (tiempoInterrupcion - ultimaInterrupcion > 5) {  // rutina antirebote desestima  // pulsos menores a 5 mseg.
+      if (digitalRead(DT_A) == HIGH)                    // si B es HIGH, sentido horario
+      {
+        POS_A++;  // incrementa POS_A en 1
+        STEPSX = STEPSX + GENERAL_STEP_X;
+      } else {    // si B es LOW, senti anti horario
+        POS_A--;  // decrementa POS_A en 1
+        STEPSX = STEPSX - GENERAL_STEP_X;
+      }
+
+      POS_A = min(limit_POS_A, max(0, POS_A));
+      STEPSX = min(15000, max(0, STEPSX));  // establece limite inferior de 0 y
+
+      ultimaInterrupcion = tiempoInterrupcion;  // guarda valor actualizado del tiempo
+    }
+  }
+  void encoder2() {
+    static unsigned long ultimaInterrupcion = 0;  // variable static con ultimo valor de // tiempo de interrupcion
+    unsigned long tiempoInterrupcion = millis();  // variable almacena valor de func. millis
+
+    if (tiempoInterrupcion - ultimaInterrupcion > 5) {  // rutina antirebote desestima // pulsos menores a 5 mseg.
+      if (digitalRead(DT_B) == HIGH)                    // si B es HIGH, sentido horario
+      {
+        POS_B++;  // incrementa POS_A en 1
+        STEPSY = STEPSY + GENERAL_STEP_Y;
+      } else {    // si B es LOW, senti anti horario
+        POS_B--;  // decrementa POS_A en 1
+        STEPSY = STEPSY - GENERAL_STEP_Y;
+      }
+
+
+      POS_B = min(limit_POS_B, max(0, POS_B));  // establece limite inferior de 0 y
+      STEPSY = min(10000, max(0, STEPSY));      // establece limite inferior de 0 y
+
+      //savesteps();
+      // superior de 100 para POS_A
+      ultimaInterrupcion = tiempoInterrupcion;  // guarda valor actualizado del tiempo
+
+
+    }  // de la interrupcion en variable static
+  }
+
+  void push_a() {
+    //Variable la cual hará que en determinado menú, nos regresemos al AUX_PRINT_A
+    if (millis() - ultimoTiempo > debounceDelay) {
+      // Actualiza el tiempo del último cambio del botón
+      ultimoTiempo = millis();
+      if (digitalRead(BUTTON_B) == LOW) {
+        Serial.println("FUNCIONA_B");
+        PUSH_B = 1;
+
+        // Espera hasta que pase el intervalo
+      }
+    }
+  }
+
+
+
+
+  void push_b() {
+
+    if (millis() - ultimoTiempo > debounceDelay) {
+      // Actualiza el tiempo del último cambio del botón
+      ultimoTiempo = millis();
+      if (digitalRead(BUTTON_A) == LOW) {
+        Serial.println("FUNCIONA_A");
+        PUSH_A = 1;
+      }
+    }
+  }
+
+  int max(int num1, int num2) {
+    if (num1 > num2) {
+      return num1;
+    } else {
+      return num2;
+    }
+  }
+
+  int min(int num1, int num2) {
+    if (num1 > num2) {
+      return num2;
+    } else {
+      return num1;
+    }
+  }
+};
+
+class Values {
+public:
+  int STEPSX, STEPSY;
+  int POS_A, POS_B;
+
+  virtual void saveData(Encoder& EncoderObject) {
+  }
+  virtual void restoreData(Encoder& EncoderObject) {
+  }
+};
+
+
+
+
+class MotorMovement : public Values {
+private:
+public:
+  volatile int POS_A;
+  volatile int POS_B;
+  volatile int STEPSX;
+  volatile int STEPSY;
+
+  volatile int getPOS_A() {
+    return POS_A;
+  }
+  volatile int getPOS_B() {
+    return POS_B;
+  }
+  volatile int getSTEPSX() {
+    return STEPSX;
+  }
+  volatile int getSTEPSY() {
+    return STEPSY;
+  }
+
+  void saveData(Encoder& EncoderObject) override {
+    POS_A = EncoderObject.getPOS_A();
+    POS_B = EncoderObject.getPOS_B();
+    STEPSX = EncoderObject.getSTEPSX();
+    STEPSY = EncoderObject.getSTEPSY();
+  }
+
+  void restoreData(Encoder& EncoderObject) override {
+    EncoderObject.restoreData(POS_A, POS_B, STEPSX, STEPSY);
+  }
+
+  void stepMotor_y(int mm, int intervalUs) {
+    int steps = mm * FACTOR_MOVEMENT;
+    for (int i = 0; i < steps; i++) {
+      digitalWrite(PULY, HIGH);
+      delayMicroseconds(10);  // pulso seguro
+      digitalWrite(PULY, LOW);
+      delayMicroseconds(intervalUs);
+    }
+  }
+
+  void stepMotor_x(int mm, int intervalUs) {
+    int steps = mm * FACTOR_MOVEMENT;
+    for (int i = 0; i < steps; i++) {
+      digitalWrite(PULX, HIGH);
+      delayMicroseconds(10);  // pulso seguro
+      digitalWrite(PULX, LOW);
+      delayMicroseconds(intervalUs);
+    }
+  }
+
+  void moveFromTo(Files& FilesObject, int AUX_STEPS_X, int AUX_STEPS_Y, int STEPSX, int STEPSY) {
+    //Movimiento de motores y
+
+    while (AUX_STEPS_Y < STEPSY) {
+      digitalWrite(DIRY, HIGH);
+      stepMotor_y(GENERAL_STEP_Y, 150);
+      AUX_STEPS_Y += GENERAL_STEP_Y;
+
+      if (is_process_in_execution){
+      DataWriter.create("hour");
+      printDriverYInfo("Driver 1 Info");
+      DataWriter.close();
+      }
+    }
+
+    while (AUX_STEPS_Y > STEPSY) {
+      digitalWrite(DIRY, LOW);
+      stepMotor_y(GENERAL_STEP_Y, 150);
+      AUX_STEPS_Y -= GENERAL_STEP_Y;
+
+      if (is_process_in_execution){
+      DataWriter.create("hour");
+      printDriverYInfo("Driver 1 Info");
+      DataWriter.close();
+      }
+    }
+    while (AUX_STEPS_X < STEPSX) {
+      digitalWrite(DIRX, HIGH);
+      stepMotor_x(GENERAL_STEP_X, 150);
+      AUX_STEPS_X += GENERAL_STEP_X;
+
+      if (is_process_in_execution){
+      DataWriter.create("hour");
+      printDriverXInfo("Driver 2 Info");
+      DataWriter.close();
+      }
+    }
+
+    while (AUX_STEPS_X > STEPSX) {
+      digitalWrite(DIRX, LOW);
+      stepMotor_x(GENERAL_STEP_X, 150);
+      AUX_STEPS_X -= GENERAL_STEP_X;
+
+      if (is_process_in_execution){
+      DataWriter.create("hour");
+      printDriverXInfo("Driver 2 Info");
+      DataWriter.close();
+      }
+    }
+
+
+    // ApiEndpoint.establishConnection();
+    // BlinkHeartBeatLED(OnBoard_LED, 500);  // change blinking to a lower frequency indicating beeing connected
+    // DataWriter.sendAllFilesInDirectory("/iot/daily");
+    
+
+    ApiEndpoint.establishConnection();
+    BlinkHeartBeatLED(OnBoard_LED,500); // change blinking to a lower frequency indicating beeing connected
+    DataWriter.sendAllFilesInDirectory("/iot/daily");
+    if (!is_process_in_execution){
+      if (Time.everyCertainMinutes(5)){
+      // if (Time.isSpecificTime(23,2)){
+        ApiEndpoint.establishConnection();
+        BlinkHeartBeatLED(OnBoard_LED,500); // change blinking to a lower frequency indicating beeing connected
+        DataWriter.sendAllFilesInDirectory("/iot/daily");
+      }
+    }
+    FilesObject.savePos(AUX_STEPS_X, AUX_STEPS_Y);
+  }
 };
 
 //------Classes refer to LCD options------
 
-class ILCDBaseNavigation{
-  public:
-    volatile int POS_A;      // variable POS_A con valor inicial de 50 y definida
-    volatile int AUX_POS_A;  //almacena el valor de pos_A
-    bool aux_PUSH_A;
-    bool aux_PUSH_B;
-    volatile int OptionNumber; //Me dice cuantas opciones estará desplegando
-    volatile int OptionSelection; //Me dirá que opción está eligiendo el usuario
-    volatile int currentOption=0;
+class ILCDBaseNavigation {
+public:
+  volatile int POS_A;      // variable POS_A con valor inicial de 50 y definida
+  volatile int AUX_POS_A;  //almacena el valor de pos_A
+  bool aux_PUSH_A;
+  bool aux_PUSH_B;
+  volatile int OptionNumber;     //Me dice cuantas opciones estará desplegando
+  volatile int OptionSelection;  //Me dirá que opción está eligiendo el usuario
+  volatile int currentOption = 0;
 
-    bool aux; //Indica que está en ejecución el ciclo
+  bool aux;  //Indica que está en ejecución el ciclo
 
 
-    ILCDBaseNavigation() : OptionSelection(-1),aux(1){}
+  ILCDBaseNavigation()
+    : OptionSelection(-1), aux(1) {}
 
-    virtual void Refresh(Encoder& EncoderObject){
-      Serial.print("Funciona");
-    }
+  virtual void Refresh(Encoder& EncoderObject) {
+    Serial.print("Funciona");
+  }
 
-    virtual void Refresh(int i, int j){
-      Serial.print("Funciona");
-    }
-    
-    virtual void RefreshTwo(){
-      Serial.print("Funciona");
-    }
+  virtual void Refresh(int i, int j) {
+    Serial.print("Funciona");
+  }
 
-    bool getAUX(){
-      return aux;
-    }
-    void setToZero(Encoder& EncoderObject){
-      EncoderObject.setToZero();
-      OptionSelection=-1;
-      currentOption=0;
-      aux=1;
-      
-    }
+  virtual void RefreshTwo() {
+    Serial.print("Funciona");
+  }
 
-    void outForce(Encoder& EncoderObject){
+  bool getAUX() {
+    return aux;
+  }
+  void setToZero(Encoder& EncoderObject) {
+    EncoderObject.setToZero();
+    OptionSelection = -1;
+    currentOption = 0;
+    aux = 1;
+  }
+
+  void outForce(Encoder& EncoderObject) {
+    EncoderObject.setToZero();
+    aux = 0;
+    EncoderObject.sendPUSH_B(0);
+    aux_PUSH_B = 0;
+    currentOption = 0;
+
+    lcd.clear();
+  }
+
+
+  void checkTimeForOut(Encoder& EncoderObject) {
+    DateTime finalTime = startTime + TimeSpan(0, 0, 1, 0);  // Calcula el momento en que terminará el período
+    if (rtc.now() >= finalTime) {
       EncoderObject.setToZero();
       aux = 0;
       EncoderObject.sendPUSH_B(0);
-      aux_PUSH_B=0;
-      currentOption=0;
+      aux_PUSH_B = 0;
+      currentOption = 0;
+      startTimeForOut();
+      lcd.clear();
+    }
+  }
+
+
+  virtual void out(Encoder& EncoderObject, Files& FilesObject) {
+  }
+
+  virtual void out(Encoder& EncoderObject) {
+    aux_PUSH_B = EncoderObject.getPUSH_B();  //Optine el valor
+
+    while (aux_PUSH_B == 1) {
+      EncoderObject.setToZero();
+      aux = 0;
+      EncoderObject.sendPUSH_B(0);
+      aux_PUSH_B = 0;
+      currentOption = 0;
 
       lcd.clear();
     }
-
-
-    void checkTimeForOut(Encoder& EncoderObject){
-      DateTime finalTime = startTime + TimeSpan(0, 0, 1, 0);  // Calcula el momento en que terminará el período
-        if (rtc.now() >= finalTime) {
-          EncoderObject.setToZero();
-          aux = 0;
-          EncoderObject.sendPUSH_B(0);
-          aux_PUSH_B=0;
-          currentOption=0;
-          startTimeForOut();
-          lcd.clear();
-      }
-    }
-
-
-    virtual void out(Encoder& EncoderObject, Files& FilesObject){
-
-    }
-
-    virtual void out(Encoder& EncoderObject){
-      aux_PUSH_B = EncoderObject.getPUSH_B();  //Optine el valor
-
-      while (aux_PUSH_B == 1) {
-        EncoderObject.setToZero();
-        aux = 0;
-        EncoderObject.sendPUSH_B(0);
-        aux_PUSH_B=0;
-        currentOption=0;
-
-        lcd.clear();
-        }  
-    }
-    void buttomState(Encoder& EncoderObject,int predefinedValue=-1){
-      aux_PUSH_A = EncoderObject.getPUSH_A();
-      while(aux_PUSH_A == 1){
-        if(predefinedValue==-1){
+  }
+  void buttomState(Encoder& EncoderObject, int predefinedValue = -1) {
+    aux_PUSH_A = EncoderObject.getPUSH_A();
+    while (aux_PUSH_A == 1) {
+      if (predefinedValue == -1) {
         OptionSelection = currentOption;
-        }else{
-        OptionSelection=predefinedValue;
-        }
-        EncoderObject.sendPUSH_A(0);
-        aux_PUSH_A=0;
-        lcd.clear();
+      } else {
+        OptionSelection = predefinedValue;
       }
-    
+      EncoderObject.sendPUSH_A(0);
+      aux_PUSH_A = 0;
+      lcd.clear();
+    }
   }
 
-    String dosDigitos(int numero) {
-      if (numero < 10) {
-        return "0" + String(numero);
-      } else {
-        return String(numero);
-      }
+  String dosDigitos(int numero) {
+    if (numero < 10) {
+      return "0" + String(numero);
+    } else {
+      return String(numero);
     }
+  }
 
 
 
 
-    void printValues(){
-      Serial.println("POS_A: "+String(POS_A)+" AUX_POS_A: "+String(AUX_POS_A));
-    }
-
+  void printValues() {
+    Serial.println("POS_A: " + String(POS_A) + " AUX_POS_A: " + String(AUX_POS_A));
+  }
 };
 
-class LCDRefreshRunMode: public ILCDBaseNavigation{
-  private:
-  public:
-    DateTime fecha;
-    //LCDRefreshRunMode(int option_number) : ILCDBaseNavigation(option_number) {}
+class LCDRefreshRunMode : public ILCDBaseNavigation {
+private:
+public:
+  DateTime fecha;
+  //LCDRefreshRunMode(int option_number) : ILCDBaseNavigation(option_number) {}
 
-    void startClock(){
-      fecha = rtc.now();                             // Momento en que comienza el período
-    }
-    void Refresh (int i, int j) override{
+  void startClock() {
+    fecha = rtc.now();  // Momento en que comienza el período
+  }
+  void Refresh(int i, int j) override {
 
-      DateTime inicio = rtc.now();                                      // Momento en que comienza el período
-      DateTime fin = inicio + TimeSpan(0, 0, MINUTOS[j], SEGUNDOS[j]);  // Calcula el momento en que terminará el período
-      while (rtc.now() <= fin) {
-        DateTime ahora = rtc.now();
-        TimeSpan Transcurrido = ahora - inicio;
-        TimeSpan Tiempo_total = ahora - fecha;
+    DateTime inicio = rtc.now();                                      // Momento en que comienza el período
+    DateTime fin = inicio + TimeSpan(0, 0, MINUTOS[j], SEGUNDOS[j]);  // Calcula el momento en que terminará el período
+    while (rtc.now() <= fin) {
+      DateTime ahora = rtc.now();
+      TimeSpan Transcurrido = ahora - inicio;
+      TimeSpan Tiempo_total = ahora - fecha;
 
-        //Impresión del paso en el que va
-        lcd.setCursor(7, 1);
-        lcd.print(String(j));
+      //Impresión del paso en el que va
+      lcd.setCursor(7, 1);
+      lcd.print(String(j));
 
-        //Impresión del número de la capa en la que va
-        lcd.setCursor(16, 1);
-        lcd.print(String(i));
+      //Impresión del número de la capa en la que va
+      lcd.setCursor(16, 1);
+      lcd.print(String(i));
 
-        //impresión del tiempo del paso
-        lcd.setCursor(9, 2);
-        lcd.print(dosDigitos(Transcurrido.minutes()));  // funcion millis() / 1000 para segundos transcurridos
-        lcd.print(":");
-        lcd.print(dosDigitos(Transcurrido.seconds()));  // funcion millis() / 1000 para segundos transcurridos
-        lcd.print("  ");
-
-        //impresión del tiempo total desde el inicio del ciclo
-        lcd.setCursor(10, 4);
-        lcd.print(dosDigitos(Tiempo_total.minutes()));
-        lcd.print(":");
-        lcd.print(dosDigitos(Tiempo_total.seconds()));
-        lcd.print("  ");
-
-      }
-      
-
-      }
-
-    void inter(){
-      lcd.setCursor(1, 0);
-      lcd.print("*PROCESO EN CURSO*");
-      lcd.setCursor(1, 1);
-      lcd.print("PASO: ");
-
-      lcd.setCursor(11, 1);
-      lcd.print("CAPA: ");
-
-      lcd.setCursor(1, 2);
-      lcd.print("T PASO: ");
-
-      lcd.setCursor(1, 4);
-      lcd.print("T TOTAL: ");
-    }
-
-};
-
-class LCDLineRefresh: public ILCDBaseNavigation{
-  private:
-  public:
-    std::vector<Asociacion> palabras;
-    int currentPage=0;
-    int auxiliar;
-
-    //Esta función inserta el listado de opciones
-    void OptionNames(const std::vector<Asociacion>& lista_palabras){
-      palabras = lista_palabras;
-    }
-
-    void lineRefresh(Encoder& EncoderObject){
-      POS_A = EncoderObject.getPOS_A();
-      AUX_POS_A = EncoderObject.getAUX_POS_A();
-
-      //Este código nos dice en que página estamos del listado de opciones
-
-      std::size_t variable = palabras.size();
-      int numeroElementos = static_cast<int>(variable);
-
-      if(POS_A>=20*(currentPage+1)&& POS_A<20*(currentPage+2)){
-        currentPage = currentPage+1;
-        lcd.clear();
-      }else if(POS_A>=20*(currentPage-1) && POS_A<20*currentPage){
-        currentPage = currentPage-1;
-        lcd.clear();
-      }
-      Serial.println("CurrentPage:"+String(currentPage));
-
-      if(POS_A!=0){
-        if(POS_A<5*(currentOption+2) && POS_A>=5*(currentOption+1)){
-          currentOption = currentOption+1;
-        }else if(POS_A<5*currentOption && POS_A>=5*(currentOption-1)){
-          currentOption = currentOption-1;
-        }
-      }
-      Serial.println("CurrentOption: "+String(currentOption));
-      //Serial.println(POS_A);
-
-      int contador = 0;
-      int totalPages = numeroElementos/4;
-      int limit = currentPage*4+4;
-      for (int i = currentPage*4; i < min(limit,numeroElementos) ; i++) {
-        lcd.setCursor(1, contador);
-        lcd.print(palabras[i].nombreArchivo.substring(0,16)); 
-        contador = contador + 1;
-        if(contador>4){
-          contador=0;
-        }
-      }
-
-      if(numeroElementos>4){
-        if(currentPage==totalPages){
-          auxiliar = numeroElementos%4;
-          if (auxiliar == 0){
-            auxiliar = 4;
-          }
-        }else{
-          auxiliar=4;
-        }
-      }else if(numeroElementos<4){
-        auxiliar=numeroElementos;
-      }
-      Serial.println(POS_A);
-
-      //Establece la cota superior de POS_A
-      EncoderObject.savelimit_POS_A(numeroElementos*5);
-  
-
-      switch(auxiliar){
-
-        case 1:
-          if (POS_A >= 0 && POS_A <= AUX_POS_A + 5) {
-            lcd.setCursor(0, 0);
-            lcd.print("-");
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-            lcd.setCursor(0, 3);
-            lcd.print(" ");
-          }
-          break;
-        case 2:
-          if (POS_A >= 0 && POS_A < AUX_POS_A + 5) {
-              lcd.setCursor(0, 1);
-              lcd.print(" ");
-              lcd.setCursor(0, 0);
-              lcd.print("-");
-            }
-
-            if (POS_A >= AUX_POS_A + 5 && POS_A <= AUX_POS_A + 10) {
-              lcd.setCursor(0, 0);
-              lcd.print(" ");
-              lcd.setCursor(0, 1);
-              lcd.print("-");
-            }
-
-
-            break;
-        case 3:
-          if (POS_A >= 0 && POS_A < 5) {
-            lcd.setCursor(0, 0);
-            lcd.print("-");
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-          }
-
-          if (POS_A >=  5 && POS_A < 10) {
-            lcd.setCursor(0, 0);
-            lcd.print(" ");
-            lcd.setCursor(0, 1);
-            lcd.print("-");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-
-          }
-
-          if (POS_A >= 10 && POS_A <= 15) {
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 0);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print("-");
-          }
-
-          break;
-        case 4:
-          if (POS_A >= 0 && POS_A < AUX_POS_A + 5) {
-            lcd.setCursor(0, 0);
-            lcd.print("-");
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-            lcd.setCursor(0, 3);
-            lcd.print(" ");
-          }
-
-          if (POS_A >= AUX_POS_A + 5 && POS_A < AUX_POS_A + 10) {
-            lcd.setCursor(0, 0);
-            lcd.print(" ");
-            lcd.setCursor(0, 1);
-            lcd.print("-");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-            lcd.setCursor(0, 3);
-            lcd.print(" ");
-
-          }
-
-          if (POS_A >= AUX_POS_A + 10 && POS_A < AUX_POS_A + 15) {
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 0);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print("-");
-            lcd.setCursor(0, 3);
-            lcd.print(" ");
-          }
-          if (POS_A >= AUX_POS_A + 15 && POS_A < AUX_POS_A + 20) {
-            lcd.setCursor(0, 1);
-            lcd.print(" ");
-            lcd.setCursor(0, 0);
-            lcd.print(" ");
-            lcd.setCursor(0, 2);
-            lcd.print(" ");
-            lcd.setCursor(0, 3);
-            lcd.print("-");
-          }
-          if (POS_A >= AUX_POS_A + 20) {
-            AUX_POS_A = POS_A;
-            EncoderObject.saveAUX_POS_A(AUX_POS_A);
-          }
-          if (POS_A <= AUX_POS_A - 1) {
-            AUX_POS_A = POS_A - 19; 
-            EncoderObject.saveAUX_POS_A(AUX_POS_A);
-
-          }
-      }  
-    }
-
-
-    int max(int num1, int num2) {
-      if (num1 > num2) {
-        return num1;
-      } else {
-        return num2;
-      }
-    }
-
-    int min(int num1, int num2) {
-      if (num1 > num2) {
-        return num2;
-      } else {
-        return num1;
-      }
-    }
-
-};
-
-class LCDInitialMenu: public LCDLineRefresh{
-  public:
-    void Refresh(Encoder& EncoderObject) override{ 
-      DateTime fecha = rtc.now();
-      lcd.setCursor(0, 3);  // ubica cursor en columna 0 y linea 1
-      lcd.print("HORA: ");
-      lcd.print(dosDigitos(fecha.hour()));  // funcion millis() / 1000 para segundos transcurridos
+      //impresión del tiempo del paso
+      lcd.setCursor(9, 2);
+      lcd.print(dosDigitos(Transcurrido.minutes()));  // funcion millis() / 1000 para segundos transcurridos
       lcd.print(":");
-      lcd.print(dosDigitos(fecha.minute()));  // funcion millis() / 1000 para segundos transcurridos
+      lcd.print(dosDigitos(Transcurrido.seconds()));  // funcion millis() / 1000 para segundos transcurridos
+      lcd.print("  ");
+
+      //impresión del tiempo total desde el inicio del ciclo
+      lcd.setCursor(10, 4);
+      lcd.print(dosDigitos(Tiempo_total.minutes()));
       lcd.print(":");
-      lcd.print(dosDigitos(fecha.second()));  // funcion millis() / 1000 para segundos transcurridos
-
+      lcd.print(dosDigitos(Tiempo_total.seconds()));
+      lcd.print("  ");
     }
+  }
 
+  void inter() {
+    lcd.setCursor(1, 0);
+    lcd.print("*PROCESO EN CURSO*");
+    lcd.setCursor(1, 1);
+    lcd.print("PASO: ");
+
+    lcd.setCursor(11, 1);
+    lcd.print("CAPA: ");
+
+    lcd.setCursor(1, 2);
+    lcd.print("T PASO: ");
+
+    lcd.setCursor(1, 4);
+    lcd.print("T TOTAL: ");
+  }
 };
 
-class LCDRunMode: public ILCDBaseNavigation{
-  private:
-  public:
-    int layerNumber;
+class LCDLineRefresh : public ILCDBaseNavigation {
+private:
+public:
+  std::vector<Asociacion> palabras;
+  int currentPage = 0;
+  int auxiliar;
 
-    //LCDRunMode (int option_number) : ILCDBaseNavigation(option_number){}
+  //Esta función inserta el listado de opciones
+  void OptionNames(const std::vector<Asociacion>& lista_palabras) {
+    palabras = lista_palabras;
+  }
 
-    void Refresh (Encoder& EncoderObject) override {
-        int POS_A=EncoderObject.getPOS_A();
-        lcd.setCursor(2, 1);
-        lcd.print("NUMERO DE CAPAS:");
-        lcd.setCursor(0, 2);
-        lcd.print("         ");
-        lcd.setCursor(0, 2);
-        lcd.print("         ");
-        lcd.print(POS_A);
-        lcd.print("    ");
+  void lineRefresh(Encoder& EncoderObject) {
+    POS_A = EncoderObject.getPOS_A();
+    AUX_POS_A = EncoderObject.getAUX_POS_A();
+
+    //Este código nos dice en que página estamos del listado de opciones
+
+    std::size_t variable = palabras.size();
+    int numeroElementos = static_cast<int>(variable);
+
+    if (POS_A >= 20 * (currentPage + 1) && POS_A < 20 * (currentPage + 2)) {
+      currentPage = currentPage + 1;
+      lcd.clear();
+    } else if (POS_A >= 20 * (currentPage - 1) && POS_A < 20 * currentPage) {
+      currentPage = currentPage - 1;
+      lcd.clear();
     }
-    void saveLayerNumber(Encoder& EncoderObject){
-        POS_A = EncoderObject.getPOS_A();
-        layerNumber = POS_A;
+    Serial.println("CurrentPage:" + String(currentPage));
+
+    if (POS_A != 0) {
+      if (POS_A < 5 * (currentOption + 2) && POS_A >= 5 * (currentOption + 1)) {
+        currentOption = currentOption + 1;
+      } else if (POS_A < 5 * currentOption && POS_A >= 5 * (currentOption - 1)) {
+        currentOption = currentOption - 1;
+      }
     }
-    int getlayerNumber(){
-      return layerNumber;
+    Serial.println("CurrentOption: " + String(currentOption));
+    //Serial.println(POS_A);
+
+    int contador = 0;
+    int totalPages = numeroElementos / 4;
+    int limit = currentPage * 4 + 4;
+    for (int i = currentPage * 4; i < min(limit, numeroElementos); i++) {
+      lcd.setCursor(1, contador);
+      lcd.print(palabras[i].nombreArchivo.substring(0, 16));
+      contador = contador + 1;
+      if (contador > 4) {
+        contador = 0;
+      }
     }
 
+    if (numeroElementos > 4) {
+      if (currentPage == totalPages) {
+        auxiliar = numeroElementos % 4;
+        if (auxiliar == 0) {
+          auxiliar = 4;
+        }
+      } else {
+        auxiliar = 4;
+      }
+    } else if (numeroElementos < 4) {
+      auxiliar = numeroElementos;
+    }
+    Serial.println(POS_A);
+
+    //Establece la cota superior de POS_A
+    EncoderObject.savelimit_POS_A(numeroElementos * 5);
 
 
+    switch (auxiliar) {
+
+      case 1:
+        if (POS_A >= 0 && POS_A <= AUX_POS_A + 5) {
+          lcd.setCursor(0, 0);
+          lcd.print("-");
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+          lcd.setCursor(0, 3);
+          lcd.print(" ");
+        }
+        break;
+      case 2:
+        if (POS_A >= 0 && POS_A < AUX_POS_A + 5) {
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 0);
+          lcd.print("-");
+        }
+
+        if (POS_A >= AUX_POS_A + 5 && POS_A <= AUX_POS_A + 10) {
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 1);
+          lcd.print("-");
+        }
+
+
+        break;
+      case 3:
+        if (POS_A >= 0 && POS_A < 5) {
+          lcd.setCursor(0, 0);
+          lcd.print("-");
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+        }
+
+        if (POS_A >= 5 && POS_A < 10) {
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 1);
+          lcd.print("-");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+        }
+
+        if (POS_A >= 10 && POS_A <= 15) {
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print("-");
+        }
+
+        break;
+      case 4:
+        if (POS_A >= 0 && POS_A < AUX_POS_A + 5) {
+          lcd.setCursor(0, 0);
+          lcd.print("-");
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+          lcd.setCursor(0, 3);
+          lcd.print(" ");
+        }
+
+        if (POS_A >= AUX_POS_A + 5 && POS_A < AUX_POS_A + 10) {
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 1);
+          lcd.print("-");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+          lcd.setCursor(0, 3);
+          lcd.print(" ");
+        }
+
+        if (POS_A >= AUX_POS_A + 10 && POS_A < AUX_POS_A + 15) {
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print("-");
+          lcd.setCursor(0, 3);
+          lcd.print(" ");
+        }
+        if (POS_A >= AUX_POS_A + 15 && POS_A < AUX_POS_A + 20) {
+          lcd.setCursor(0, 1);
+          lcd.print(" ");
+          lcd.setCursor(0, 0);
+          lcd.print(" ");
+          lcd.setCursor(0, 2);
+          lcd.print(" ");
+          lcd.setCursor(0, 3);
+          lcd.print("-");
+        }
+        if (POS_A >= AUX_POS_A + 20) {
+          AUX_POS_A = POS_A;
+          EncoderObject.saveAUX_POS_A(AUX_POS_A);
+        }
+        if (POS_A <= AUX_POS_A - 1) {
+          AUX_POS_A = POS_A - 19;
+          EncoderObject.saveAUX_POS_A(AUX_POS_A);
+        }
+    }
+  }
+
+
+  int max(int num1, int num2) {
+    if (num1 > num2) {
+      return num1;
+    } else {
+      return num2;
+    }
+  }
+
+  int min(int num1, int num2) {
+    if (num1 > num2) {
+      return num2;
+    } else {
+      return num1;
+    }
+  }
 };
 
-class LCDNewModeSteps: public ILCDBaseNavigation{
-  private:
-  public:
-    int POS_A;
-    int POS_B;
-    int stepNumber=0;
-  void Refresh(Encoder& EncoderObject) override{
+class LCDInitialMenu : public LCDLineRefresh {
+public:
+  void Refresh(Encoder& EncoderObject) override {
+    DateTime fecha = rtc.now();
+    lcd.setCursor(0, 3);  // ubica cursor en columna 0 y linea 1
+    lcd.print("HORA: ");
+    lcd.print(dosDigitos(fecha.hour()));  // funcion millis() / 1000 para segundos transcurridos
+    lcd.print(":");
+    lcd.print(dosDigitos(fecha.minute()));  // funcion millis() / 1000 para segundos transcurridos
+    lcd.print(":");
+    lcd.print(dosDigitos(fecha.second()));  // funcion millis() / 1000 para segundos transcurridos
+  }
+};
+
+class LCDRunMode : public ILCDBaseNavigation {
+private:
+public:
+  int layerNumber;
+
+  //LCDRunMode (int option_number) : ILCDBaseNavigation(option_number){}
+
+  void Refresh(Encoder& EncoderObject) override {
+    int POS_A = EncoderObject.getPOS_A();
+    lcd.setCursor(2, 1);
+    lcd.print("NUMERO DE CAPAS:");
+    lcd.setCursor(0, 2);
+    lcd.print("         ");
+    lcd.setCursor(0, 2);
+    lcd.print("         ");
+    lcd.print(POS_A);
+    lcd.print("    ");
+  }
+  void saveLayerNumber(Encoder& EncoderObject) {
+    POS_A = EncoderObject.getPOS_A();
+    layerNumber = POS_A;
+  }
+  int getlayerNumber() {
+    return layerNumber;
+  }
+};
+
+class LCDNewModeSteps : public ILCDBaseNavigation {
+private:
+public:
+  int POS_A;
+  int POS_B;
+  int stepNumber = 0;
+  void Refresh(Encoder& EncoderObject) override {
     POS_A = EncoderObject.getPOS_A();
     POS_B = EncoderObject.getPOS_B();
 
@@ -1783,69 +1838,64 @@ class LCDNewModeSteps: public ILCDBaseNavigation{
     lcd.print("EJEY (0-100): ");
     lcd.print(POS_B);
     lcd.print("  ");
-
   }
 
-  void out(Encoder& EncoderObject, Files& FilesObject) override{
+  void out(Encoder& EncoderObject, Files& FilesObject) override {
     aux_PUSH_B = EncoderObject.getPUSH_B();  //Optine el valor
 
     while (aux_PUSH_B == 1) {
       EncoderObject.setToZero();
       aux = 0;
       EncoderObject.sendPUSH_B(0);
-      aux_PUSH_B=0;
-      currentOption=0;
-      
+      aux_PUSH_B = 0;
+      currentOption = 0;
+
       FilesObject.saveMode();
       FilesObject.saveNameFile();
       lcd.clear();
-    }  
+    }
   }
 };
 
-class LCDNewModeTime: public ILCDBaseNavigation{
-  public:
-    int POS_A;
-    int POS_B;
-    
-    void Refresh(Encoder& EncoderObject) override{
-      POS_A = EncoderObject.getPOS_A();
-      POS_B = EncoderObject.getPOS_B();
+class LCDNewModeTime : public ILCDBaseNavigation {
+public:
+  int POS_A;
+  int POS_B;
 
-      lcd.setCursor(1, 0);
-      lcd.print("*TIEMPO DEL PASO*");
-  
+  void Refresh(Encoder& EncoderObject) override {
+    POS_A = EncoderObject.getPOS_A();
+    POS_B = EncoderObject.getPOS_B();
 
-      lcd.setCursor(1, 2);
-      lcd.print("MINUTOS: ");
-      lcd.print(POS_A);
-      lcd.print("  ");
-      lcd.setCursor(1, 3);
-      lcd.print("SEGUNDOS: ");
-      lcd.print(POS_B);
-      lcd.print("  ");
-
-    }
+    lcd.setCursor(1, 0);
+    lcd.print("*TIEMPO DEL PASO*");
 
 
-
+    lcd.setCursor(1, 2);
+    lcd.print("MINUTOS: ");
+    lcd.print(POS_A);
+    lcd.print("  ");
+    lcd.setCursor(1, 3);
+    lcd.print("SEGUNDOS: ");
+    lcd.print(POS_B);
+    lcd.print("  ");
+  }
 };
 
 //------Classes refer to LCD options------
 
 
 
-void setup(){
+void setup() {
   Serial.begin(115200);
   delay(1000);
 
   lcd.setBacklightPin(3, POSITIVE);  // puerto P3 de PCF8574 como positivo
   lcd.setBacklight(HIGH);            // habilita iluminacion posterior de LCD
   lcd.begin(20, 4);                  // 16 columnas por 2 lineas para LCD 1602A
-  lcd.clear();    
+  lcd.clear();
 
 
-  //Encoder Pines 
+  //Encoder Pines
   pinMode(CLK_A, INPUT_PULLUP);
   pinMode(DT_A, INPUT_PULLUP);
   pinMode(CLK_B, INPUT_PULLUP);
@@ -1866,7 +1916,8 @@ void setup(){
 
   if (!rtc.begin()) {
     Serial.println("¡Modulo RTC no encontrado!");
-    while (1);
+    while (1)
+      ;
   }
   if (!SD.begin(sd_chip_select)) {
     Serial.println("La inicialización de la tarjeta SD falló. Verifique la tarjeta SD en el ESP32 o Arduino.");
@@ -1876,12 +1927,12 @@ void setup(){
     lcd.setCursor(1, 2);
     lcd.print("connect and restart");
 
-    while (1);
+    while (1)
+      ;
   }
 
   // --------API CONFIGURATION--------
 
-  // ApiEndpoint.establishConnection();
   DataWriter.establishConnection();
   Time.establishConnection();
 
@@ -1917,44 +1968,53 @@ void setup(){
   driver2.begin();
 
   // UART recomendado
-  driver1.pdn_disable(true);       // usar PDN_UART como UART
-  driver2.pdn_disable(true);       // usar PDN_UART como UART
+  driver1.pdn_disable(true);  // usar PDN_UART como UART
+  driver2.pdn_disable(true);  // usar PDN_UART como UART
 
-  driver1.I_scale_analog(false);   // no depender del pot
-  driver2.I_scale_analog(false);   // no depender del pot
+  driver1.I_scale_analog(false);  // no depender del pot
+  driver2.I_scale_analog(false);  // no depender del pot
 
   // Chopper ON (si toff=0 no mueve)
   driver1.toff(3);
   driver2.toff(3);
 
   // Corriente: tu motor es 0.7A -> empieza seguro
-  driver1.rms_current(500);        // sube/baja luego (600–700 recomendado)
-  driver2.rms_current(500);        // sube/baja luego (600–700 recomendado)
+  driver1.rms_current(500);  // sube/baja luego (600–700 recomendado)
+  driver2.rms_current(500);  // sube/baja luego (600–700 recomendado)
 
   driver1.microsteps(current_usteps);
   driver2.microsteps(current_usteps);
 
   // Lee una vez
-  Serial.print("IFCNT: "); Serial.println(driver1.IFCNT());
-  Serial.print("GSTAT: 0x"); Serial.println(driver1.GSTAT(), HEX);
-  Serial.print("IOIN: 0x"); Serial.println(driver1.IOIN(), HEX);
-  Serial.print("DRV_STATUS: 0x"); Serial.println(driver1.DRV_STATUS(), HEX);
-  Serial.print("cs_actual: "); Serial.println(driver1.cs_actual());
+  Serial.print("IFCNT: ");
+  Serial.println(driver1.IFCNT());
+  Serial.print("GSTAT: 0x");
+  Serial.println(driver1.GSTAT(), HEX);
+  Serial.print("IOIN: 0x");
+  Serial.println(driver1.IOIN(), HEX);
+  Serial.print("DRV_STATUS: 0x");
+  Serial.println(driver1.DRV_STATUS(), HEX);
+  Serial.print("cs_actual: ");
+  Serial.println(driver1.cs_actual());
 
-  Serial.print("IFCNT: "); Serial.println(driver2.IFCNT());
-  Serial.print("GSTAT: 0x"); Serial.println(driver2.GSTAT(), HEX);
-  Serial.print("IOIN: 0x"); Serial.println(driver2.IOIN(), HEX);
-  Serial.print("DRV_STATUS: 0x"); Serial.println(driver2.DRV_STATUS(), HEX);
-  Serial.print("cs_actual: "); Serial.println(driver2.cs_actual());
+  Serial.print("IFCNT: ");
+  Serial.println(driver2.IFCNT());
+  Serial.print("GSTAT: 0x");
+  Serial.println(driver2.GSTAT(), HEX);
+  Serial.print("IOIN: 0x");
+  Serial.println(driver2.IOIN(), HEX);
+  Serial.print("DRV_STATUS: 0x");
+  Serial.println(driver2.DRV_STATUS(), HEX);
+  Serial.print("cs_actual: ");
+  Serial.println(driver2.cs_actual());
 
   Serial.println("=== END SETUP READ ===");
-
 }
 
 Encoder Encoders;
 
 
-void loop(){
+void loop() {
   //Names of the options
   std::vector<Asociacion> c1;
   std::vector<Asociacion> c2;
@@ -1978,145 +2038,152 @@ void loop(){
   //alueRefresh valueRefresh(0);
   //ILCDBaseNavigation* LCD_RunMode = &valueRefresh;
 
-  c1 = {{0,"CORRER PASOS"},{1,"CONFIGURACION"}};
+  c1 = { { 0, "CORRER PASOS" }, { 1, "CONFIGURACION" } };
   LCD_StartMenu.OptionNames(c1);
   LCD_StartMenu.setToZero(Encoders);
-  while(LCD_StartMenu.getAUX()){
-    switch (LCD_StartMenu.OptionSelection){
+  while (LCD_StartMenu.getAUX()) {
+    switch (LCD_StartMenu.OptionSelection) {
 
-      case 0: //Opcion Iniciar ciclo
+      case 0:  //Opcion Iniciar ciclo
         startTimeForOut();
         LCD_RunMode.setToZero(Encoders);
-        while(LCD_RunMode.getAUX()){
+        while (LCD_RunMode.getAUX()) {
 
-          switch(LCD_RunMode.OptionSelection){
+          switch (LCD_RunMode.OptionSelection) {
             case 0:
               LCD_RefreshRunMode.setToZero(Encoders);
-              while(LCD_RefreshRunMode.getAUX()){
+              while (LCD_RefreshRunMode.getAUX()) {
+                is_process_in_execution = true;
                 LCD_RefreshRunMode.inter();
-                LCD_RefreshRunMode.startClock(); //Empieza a medir el tiempo inicial del proceso
+                LCD_RefreshRunMode.startClock();  //Empieza a medir el tiempo inicial del proceso
 
-                SD_Files.selectLastFile(); //Hace lo necesario para recopilar los datos del último archivo
+                SD_Files.selectLastFile();  //Hace lo necesario para recopilar los datos del último archivo
 
                 for (int i = 0; i < LCD_RunMode.getlayerNumber(); i++) {
                   for (int j = 0; j < SD_Files.getstepNumber(); j++) {
                     volatile int STEPS_X = X[j] * GENERAL_STEP_X;
                     volatile int STEPS_Y = Y[j] * GENERAL_STEP_Y;
-                    
-                    SD_Files.readPreviousSteps();
-                    Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
-                    LCD_RefreshRunMode.Refresh(i ,j); //Empezará a contar el tiempo
 
+                    SD_Files.readPreviousSteps();
+                    Motors.moveFromTo(SD_Files, SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
+                    LCD_RefreshRunMode.Refresh(i, j);  //Empezará a contar el tiempo
                   }
                 }
                 LCD_RefreshRunMode.out(Encoders);
                 LCD_RefreshRunMode.outForce(Encoders);
               }
-            LCD_RunMode.OptionSelection=-1;
-            
-            break;
-            default:
-              LCD_RunMode.Refresh(Encoders);//Imprime los valores actualizados en la pantalla
-              LCD_RunMode.saveLayerNumber(Encoders);//Guarda la opción seleccionada
-              LCD_RunMode.buttomState(Encoders);//Verifica si el usuario presiono el encoder
-              LCD_RunMode.checkTimeForOut(Encoders);
-              LCD_RunMode.out(Encoders); //Configura la opción de salida del while
+              LCD_RunMode.OptionSelection = -1;
 
+              break;
+            default:
+              LCD_RunMode.Refresh(Encoders);          //Imprime los valores actualizados en la pantalla
+              LCD_RunMode.saveLayerNumber(Encoders);  //Guarda la opción seleccionada
+              LCD_RunMode.buttomState(Encoders);      //Verifica si el usuario presiono el encoder
+              LCD_RunMode.checkTimeForOut(Encoders);
+              LCD_RunMode.out(Encoders);  //Configura la opción de salida del while
           }
         }
-        LCD_StartMenu.OptionSelection=-1;
-        LCD_StartMenu.currentOption=0;
+        LCD_StartMenu.OptionSelection = -1;
+        LCD_StartMenu.currentOption = 0;
 
-      break;
+        break;
 
-      case 1://Menú 2 de configuración
+      case 1:  //Menú 2 de configuración
         startTimeForOut();
         LCD_LRSettings.setToZero(Encoders);
-        while(LCD_LRSettings.getAUX()){
-          c2 = {{0,"CAMBIAR MODO"},{1,"MODIFICAR TIEMPOS"},{2,"MODO NUEVO"}};
-          switch(LCD_LRSettings.OptionSelection){
+        while (LCD_LRSettings.getAUX()) {
+          c2 = { { 0, "CAMBIAR MODO" }, { 1, "MODIFICAR TIEMPOS" }, { 2, "MODO NUEVO" }};
+          switch (LCD_LRSettings.OptionSelection) {
             case 0:
               startTimeForOut();
               LCD_LRChangeMode.setToZero(Encoders);
               SD_Files.fileAssociations();
               LCD_LRChangeMode.OptionNames(SD_Files.asociaciones);
-              while(LCD_LRChangeMode.getAUX()){
-                switch(LCD_LRChangeMode.OptionSelection){
+              while (LCD_LRChangeMode.getAUX()) {
+                switch (LCD_LRChangeMode.OptionSelection) {
                   case 0:
                     SD_Files.sendFileName(SD_Files.asociaciones[LCD_LRChangeMode.currentOption].nombreArchivo);
                     SD_Files.saveNameFile();
                     LCD_LRChangeMode.OptionSelection = -1;
                     LCD_LRChangeMode.currentOption = 0;
-                  break;
+                    break;
 
                   default:
                     LCD_LRChangeMode.lineRefresh(Encoders);
-                    LCD_LRChangeMode.buttomState(Encoders,0);
+                    LCD_LRChangeMode.buttomState(Encoders, 0);
                     LCD_LRChangeMode.checkTimeForOut(Encoders);
                     LCD_LRChangeMode.out(Encoders);
-                    
                 }
               }
-              
-              LCD_LRSettings.OptionSelection=-1;
-              LCD_LRSettings.currentOption=0;
 
-            break;
+              LCD_LRSettings.OptionSelection = -1;
+              LCD_LRSettings.currentOption = 0;
+
+              break;
 
             case 1:
-            break;
+              break;
 
             case 2:
               LCD_NewModeSteps.setToZero(Encoders);
               Encoders.savelimit_POS_A(100);
               Encoders.savelimit_POS_B(100);
-              while(LCD_NewModeSteps.getAUX()){
-                
-                switch(LCD_NewModeSteps.OptionSelection){
+              while (LCD_NewModeSteps.getAUX()) {
+
+                switch (LCD_NewModeSteps.OptionSelection) {
                   //Se ejecuta esta opción en caso de que se presione de nuevo el encoder 1
                   case 0:
                     //aqui debería guardarse los valores de los encoders previos
+                    is_process_in_execution = false;
                     Motors.saveData(Encoders);
                     LCD_NewModeTime.setToZero(Encoders);
-                    Encoders.savelimit_POS_A(1000);
-                    Encoders.savelimit_POS_B(60);
-                    while(LCD_NewModeTime.getAUX()){
-                      switch(LCD_NewModeTime.OptionSelection){
+                    Encoders.savelimit_POS_A(100);
+                    Encoders.savelimit_POS_B(100);
+                    while (LCD_NewModeTime.getAUX()) {
+                      switch (LCD_NewModeTime.OptionSelection) {
                         case 0:
-                          SD_Files.saveStep(Motors.getPOS_A(),Motors.getPOS_B(),Encoders.getPOS_A(),Encoders.getPOS_B(),LCD_NewModeSteps.stepNumber);
+                          SD_Files.saveStep(Motors.getPOS_A(), Motors.getPOS_B(), Encoders.getPOS_A(), Encoders.getPOS_B(), LCD_NewModeSteps.stepNumber);
                           LCD_NewModeTime.outForce(Encoders);
                           Motors.restoreData(Encoders);
-                          LCD_NewModeSteps.stepNumber+=1;
-                        break;
+                          LCD_NewModeSteps.stepNumber += 1;
+                          break;
                         default:
                           LCD_NewModeTime.Refresh(Encoders);
                           LCD_NewModeTime.buttomState(Encoders);
-                          LCD_NewModeTime.out(Encoders); 
+                          LCD_NewModeTime.out(Encoders);
                       }
                     }
-                    LCD_NewModeSteps.OptionSelection=-1;
+                    LCD_NewModeSteps.OptionSelection = -1;
 
                     //Encoders.saveSTEPSX(SD_Files.getAUX_STEPS_X());
                     //Encoders.saveSTEPSY(SD_Files.getAUX_STEPS_Y());
-                  break;
+                    break;
                   default:
                     LCD_NewModeSteps.Refresh(Encoders);
                     LCD_NewModeSteps.buttomState(Encoders);
-              
+
                     SD_Files.readPreviousSteps();
-                    Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
+                    Motors.moveFromTo(SD_Files, SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
 
-                    LCD_NewModeSteps.out(Encoders,SD_Files); //Esta salida debería ser especial y que al salir guarde los datos sacas
-                    //              //Se guardan los valores x y dados por el usuario, esto para formar un paso
-                    //SD_Files.saveSteps(SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
-
+                    LCD_NewModeSteps.out(Encoders, SD_Files);  //Esta salida debería ser especial y que al salir guarde los datos sacas
+                                                               //              //Se guardan los valores x y dados por el usuario, esto para formar un paso
+                                                               //SD_Files.saveSteps(SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
                 }
               }
-              LCD_LRSettings.OptionSelection=-1;
-              LCD_LRSettings.currentOption=0;
+              LCD_LRSettings.OptionSelection = -1;
+              LCD_LRSettings.currentOption = 0;
 
-            break;
+              break;
 
+            
+            // case 3:
+            
+            //   ApiEndpoint.establishConnection();
+            //   BlinkHeartBeatLED(OnBoard_LED,500); // change blinking to a lower frequency indicating beeing connected
+            //   DataWriter.sendAllFilesInDirectory("/iot/daily");
+
+            //   break;
+                  
             default:
 
 
@@ -2125,27 +2192,22 @@ void loop(){
               LCD_LRSettings.buttomState(Encoders);
               LCD_LRSettings.checkTimeForOut(Encoders);
               LCD_LRSettings.out(Encoders);
-
-
           }
         }
         LCD_StartMenu.OptionSelection = -1;
         LCD_StartMenu.currentOption = 0;
 
-      break;
+        break;
 
-    default://Imprime el menú inicial
+      default:  //Imprime el menú inicial
 
-      //LCD_StartMenu.inter();
-      LCD_StartMenu.Refresh(Encoders);
-      LCD_StartMenu.lineRefresh(Encoders);
-      LCD_StartMenu.out(Encoders);
-      LCD_StartMenu.buttomState(Encoders);
+        //LCD_StartMenu.inter();
+        LCD_StartMenu.Refresh(Encoders);
+        LCD_StartMenu.lineRefresh(Encoders);
+        LCD_StartMenu.out(Encoders);
+        LCD_StartMenu.buttomState(Encoders);
+    }
   }
-
-  }
-
-
 }
 
 
@@ -2159,7 +2221,6 @@ void encoder2() {
 
 void push_a() {
   Encoders.push_a();
-
 }
 
 void push_b() {
@@ -2169,14 +2230,16 @@ void push_b() {
 void printDriverYInfo(const char* tag) {
   String logRow = "";
 
-  // Serial.print("\n==================== "); 
-  // Serial.print(tag); 
+  DateTime now = rtc.now();
+  logRow += now.timestamp() + ","; 
+  // Serial.print("\n==================== ");
+  // Serial.print(tag);
   // Serial.println(" ====================");
   logRow += String(tag) + ",";
 
   // ---------- UART real check (IFCNT should increase on successful write) ----------
   uint8_t if_before = driver1.IFCNT();
-  driver1.toff(3);           // write something safe
+  driver1.toff(3);  // write something safe
   // delay(50);
   uint8_t if_after = driver1.IFCNT();
 
@@ -2265,11 +2328,11 @@ void printDriverYInfo(const char* tag) {
 
   // ---------- Safety flags (decoded) ----------
   uint8_t otpw = driver1.otpw();
-  uint8_t ot   = driver1.ot();
+  uint8_t ot = driver1.ot();
   uint8_t s2ga = driver1.s2ga();
   uint8_t s2gb = driver1.s2gb();
-  uint8_t ola  = driver1.ola();
-  uint8_t olb  = driver1.olb();
+  uint8_t ola = driver1.ola();
+  uint8_t olb = driver1.olb();
 
   // Serial.print("Temp warning (otpw): ");
   // Serial.println(otpw);
@@ -2296,20 +2359,20 @@ void printDriverYInfo(const char* tag) {
   logRow += String(olb) + "\n";
 
   DataWriter.write(logRow);
-
 }
 
 void printDriverXInfo(const char* tag) {
   String logRow = "";
 
-  // Serial.print("\n==================== "); 
-  // Serial.print(tag); 
-  // Serial.println(" ====================");
+  DateTime now = rtc.now();
+
+  logRow += now.timestamp() + ","; 
+  
   logRow += String(tag) + ",";
 
   // ---------- UART real check (IFCNT should increase on successful write) ----------
   uint8_t if_before = driver2.IFCNT();
-  driver2.toff(3);           // write something safe
+  driver2.toff(3);  // write something safe
   // delay(50);
   uint8_t if_after = driver2.IFCNT();
 
@@ -2398,11 +2461,11 @@ void printDriverXInfo(const char* tag) {
 
   // ---------- Safety flags (decoded) ----------
   uint8_t otpw = driver2.otpw();
-  uint8_t ot   = driver2.ot();
+  uint8_t ot = driver2.ot();
   uint8_t s2ga = driver2.s2ga();
   uint8_t s2gb = driver2.s2gb();
-  uint8_t ola  = driver2.ola();
-  uint8_t olb  = driver2.olb();
+  uint8_t ola = driver2.ola();
+  uint8_t olb = driver2.olb();
 
   // Serial.print("Temp warning (otpw): ");
   // Serial.println(otpw);
@@ -2429,12 +2492,11 @@ void printDriverXInfo(const char* tag) {
   logRow += String(olb) + "\n";
 
   DataWriter.write(logRow);
-
 }
 
 
 
-void printCurrentTime(){
+void printCurrentTime() {
 
   DateTime now = rtc.now();
 
@@ -2457,21 +2519,18 @@ void printCurrentTime(){
 void printDirectory(File dir, int numTabs) {
   while (true) {
     File entry = dir.openNextFile();
-    if (!entry) break; // End of directory
+    if (!entry) break;  // End of directory
 
     for (uint8_t i = 0; i < numTabs; i++) Serial.print('\t');
     Serial.print(entry.name());
 
     if (entry.isDirectory()) {
       Serial.println("/");
-      printDirectory(entry, numTabs + 1); // Recursive call
+      printDirectory(entry, numTabs + 1);  // Recursive call
     } else {
       Serial.print("\t\t");
-      Serial.println(entry.size(), DEC); // File size
+      Serial.println(entry.size(), DEC);  // File size
     }
     entry.close();
   }
-
 }
-
-
