@@ -18,9 +18,6 @@ RTC_DS3231 rtc;
 
 const int chipSelect = 5;  // Pin CS para la tarjeta SD
 
-//Stepper motor
-
-
 //Counter of steps in a routine
 //Steps of the routine
 volatile int X[20];
@@ -45,13 +42,14 @@ int DIRY = 25;
 int PULY = 26;
 int VEL = 300;
 
-
-#define RXD2 16
-#define TXD2 17
 int FACTOR_MOVEMENT = 400; // pasos/mm
 
 int GENERAL_STEP_X = 3; //mm
 int GENERAL_STEP_Y = 2; //mm
+
+//Variables for drivers
+#define RXD2 16
+#define TXD2 17
 
 static constexpr float R_SENSE = 0.11f;
 static constexpr uint8_t DRIVER_ADDR_1 = 0;
@@ -64,27 +62,6 @@ TMC2209Stepper driver1(&TMCSerial, R_SENSE, DRIVER_ADDR_1);
 TMC2209Stepper driver2(&TMCSerial, R_SENSE, DRIVER_ADDR_2);
 
 
-void stepMotor_y(int mm, int intervalUs) {
-  int steps = mm*FACTOR_MOVEMENT;
-  for (int i = 0; i < steps; i++) {
-    digitalWrite(PULY, HIGH);
-    delayMicroseconds(10);      // pulso seguro
-    digitalWrite(PULY, LOW);
-    delayMicroseconds(intervalUs);
-  
-  }
-}
-
-void stepMotor_x(int mm, int intervalUs) {
-  int steps = mm*FACTOR_MOVEMENT;
-  for (int i = 0; i < steps; i++) {
-    digitalWrite(PULX, HIGH);
-    delayMicroseconds(10);      // pulso seguro
-    digitalWrite(PULX, LOW);
-    delayMicroseconds(intervalUs);
-  
-  }
-}
 
 
 struct Asociacion {//la estructura crea una relación entre cada nombre de archivo y un número
@@ -628,50 +605,72 @@ class MotorMovement: public Values{
       STEPSX=EncoderObject.getSTEPSX();
       STEPSY=EncoderObject.getSTEPSY();
     }
+
     void restoreData(Encoder& EncoderObject) override{
       EncoderObject.restoreData(POS_A,POS_B,STEPSX,STEPSY);
     }
+
+    void stepMotor_y(int mm, int intervalUs) {
+      int steps = mm*FACTOR_MOVEMENT;
+      for (int i = 0; i < steps; i++) {
+        digitalWrite(PULY, HIGH);
+        delayMicroseconds(10);      // pulso seguro
+        digitalWrite(PULY, LOW);
+        delayMicroseconds(intervalUs);
+      
+      }
+    }
+
+    void stepMotor_x(int mm, int intervalUs) {
+      int steps = mm*FACTOR_MOVEMENT;
+      for (int i = 0; i < steps; i++) {
+        digitalWrite(PULX, HIGH);
+        delayMicroseconds(10);      // pulso seguro
+        digitalWrite(PULX, LOW);
+        delayMicroseconds(intervalUs);
+      
+      }
+    }
+
     void moveFromTo(Files& FilesObject,int AUX_STEPS_X, int AUX_STEPS_Y, int STEPSX, int STEPSY) {
-      
-      
-    //Movimiento de motores y
+      //Movimiento de motores y
 
-    while (AUX_STEPS_Y < STEPSY) {
-      digitalWrite(DIRY, HIGH);
-      stepMotor_y(GENERAL_STEP_Y, 150);
-      AUX_STEPS_Y += GENERAL_STEP_Y;
+      while (AUX_STEPS_Y < STEPSY) {
+        digitalWrite(DIRY, HIGH);
+        stepMotor_y(GENERAL_STEP_Y, 150);
+        AUX_STEPS_Y += GENERAL_STEP_Y;
 
-    }
+      }
 
-    while (AUX_STEPS_Y > STEPSY) {
-      digitalWrite(DIRY, LOW);
-      stepMotor_y(GENERAL_STEP_Y, 150);
-      AUX_STEPS_Y -= GENERAL_STEP_Y;
+      while (AUX_STEPS_Y > STEPSY) {
+        digitalWrite(DIRY, LOW);
+        stepMotor_y(GENERAL_STEP_Y, 150);
+        AUX_STEPS_Y -= GENERAL_STEP_Y;
 
-    }
-    while (AUX_STEPS_X < STEPSX) {
-      digitalWrite(DIRX, HIGH);
-      stepMotor_x(GENERAL_STEP_X, 150);
-      AUX_STEPS_X += GENERAL_STEP_X;
+      }
+      while (AUX_STEPS_X < STEPSX) {
+        digitalWrite(DIRX, HIGH);
+        stepMotor_x(GENERAL_STEP_X, 150);
+        AUX_STEPS_X += GENERAL_STEP_X;
 
-    }
+      }
 
-    while (AUX_STEPS_X > STEPSX) {
-      digitalWrite(DIRX, LOW);
-      stepMotor_x(GENERAL_STEP_X, 150);
-      AUX_STEPS_X -= GENERAL_STEP_X;
-    }
+      while (AUX_STEPS_X > STEPSX) {
+        digitalWrite(DIRX, LOW);
+        stepMotor_x(GENERAL_STEP_X, 150);
+        AUX_STEPS_X -= GENERAL_STEP_X;
+      }
 
-    FilesObject.savePos(AUX_STEPS_X,AUX_STEPS_Y);
-    printDriver1Info("Driver 1 Info");
-    printDriver2Info("Driver 2 Info");
+      FilesObject.savePos(AUX_STEPS_X,AUX_STEPS_Y);
+      printDriver1Info("Driver 1 Info");
+      printDriver2Info("Driver 2 Info");
 
   }
 
 
 };
 
-//Classes inherited from OptionNavegation
+//------Classes refer to LCD options------
 
 class ILCDBaseNavigation{
   public:
@@ -847,8 +846,6 @@ class LCDRefreshRunMode: public ILCDBaseNavigation{
     }
 
 };
-
-
 
 class LCDLineRefresh: public ILCDBaseNavigation{
   private:
@@ -1102,7 +1099,6 @@ class LCDRunMode: public ILCDBaseNavigation{
 
 };
 
-
 class LCDNewModeSteps: public ILCDBaseNavigation{
   private:
   public:
@@ -1146,7 +1142,6 @@ class LCDNewModeSteps: public ILCDBaseNavigation{
   }
 };
 
-
 class LCDNewModeTime: public ILCDBaseNavigation{
   public:
     int POS_A;
@@ -1175,6 +1170,7 @@ class LCDNewModeTime: public ILCDBaseNavigation{
 
 };
 
+//------Classes refer to LCD options------
 
 
 
@@ -1188,7 +1184,7 @@ void setup(){
   lcd.clear();    
 
 
-
+  //Encoder Pines 
   pinMode(CLK_A, INPUT_PULLUP);
   pinMode(DT_A, INPUT_PULLUP);
   pinMode(CLK_B, INPUT_PULLUP);
@@ -1196,7 +1192,7 @@ void setup(){
   pinMode(BUTTON_A, INPUT_PULLUP);
   pinMode(BUTTON_B, INPUT_PULLUP);
 
-  //Pines of stepper motors
+  //Stepper motors Pines
   pinMode(DIRX, OUTPUT);
   pinMode(DIRY, OUTPUT);
   pinMode(PULX, OUTPUT);
@@ -1209,8 +1205,7 @@ void setup(){
 
   if (!rtc.begin()) {
     Serial.println("¡Modulo RTC no encontrado!");
-    while (1)
-      ;
+    while (1);
   }
   if (!SD.begin(chipSelect)) {
     Serial.println("La inicialización de la tarjeta SD falló. Verifique la tarjeta SD en el ESP32 o Arduino.");
@@ -1220,16 +1215,15 @@ void setup(){
     lcd.setCursor(1, 2);
     lcd.print("connect and restart");
 
-    
     while (1);
   }
 
+  //Drivers configuration
   TMCSerial.begin(115200, SERIAL_8N1, RXD2, TXD2);
 
-  // Driver
+  // Driver initialization
   driver1.begin();
   driver2.begin();
-
 
   // UART recomendado
   driver1.pdn_disable(true);       // usar PDN_UART como UART
@@ -1242,16 +1236,13 @@ void setup(){
   driver1.toff(3);
   driver2.toff(3);
 
-
   // Corriente: tu motor es 0.7A -> empieza seguro
   driver1.rms_current(500);        // sube/baja luego (600–700 recomendado)
   driver2.rms_current(500);        // sube/baja luego (600–700 recomendado)
 
-
   driver1.microsteps(current_usteps);
   driver2.microsteps(current_usteps);
 
-  
   // Lee una vez
   Serial.print("IFCNT: "); Serial.println(driver1.IFCNT());
   Serial.print("GSTAT: 0x"); Serial.println(driver1.GSTAT(), HEX);
@@ -1259,12 +1250,6 @@ void setup(){
   Serial.print("DRV_STATUS: 0x"); Serial.println(driver1.DRV_STATUS(), HEX);
   Serial.print("cs_actual: "); Serial.println(driver1.cs_actual());
 
-  Serial.println("=== END SETUP READ ===");
-
-
-
-
-  // Lee una vez
   Serial.print("IFCNT: "); Serial.println(driver2.IFCNT());
   Serial.print("GSTAT: 0x"); Serial.println(driver2.GSTAT(), HEX);
   Serial.print("IOIN: 0x"); Serial.println(driver2.IOIN(), HEX);
@@ -1272,7 +1257,6 @@ void setup(){
   Serial.print("cs_actual: "); Serial.println(driver2.cs_actual());
 
   Serial.println("=== END SETUP READ ===");
-
 
 }
 
@@ -1307,180 +1291,180 @@ void loop(){
   LCD_StartMenu.OptionNames(c1);
   LCD_StartMenu.setToZero(Encoders);
   while(LCD_StartMenu.getAUX()){
-  switch (LCD_StartMenu.OptionSelection){
+    switch (LCD_StartMenu.OptionSelection){
 
-  case 0: //Opcion Iniciar ciclo
-    startTimeForOut();
-    LCD_RunMode.setToZero(Encoders);
-    while(LCD_RunMode.getAUX()){
+      case 0: //Opcion Iniciar ciclo
+        startTimeForOut();
+        LCD_RunMode.setToZero(Encoders);
+        while(LCD_RunMode.getAUX()){
 
-      switch(LCD_RunMode.OptionSelection){
-        case 0:
-          LCD_RefreshRunMode.setToZero(Encoders);
-          while(LCD_RefreshRunMode.getAUX()){
-            LCD_RefreshRunMode.inter();
-            LCD_RefreshRunMode.startClock(); //Empieza a medir el tiempo inicial del proceso
-
-            SD_Files.selectLastFile(); //Hace lo necesario para recopilar los datos del último archivo
-
-            for (int i = 0; i < LCD_RunMode.getlayerNumber(); i++) {
-              for (int j = 0; j < SD_Files.getstepNumber(); j++) {
-                volatile int STEPS_X = X[j] * GENERAL_STEP_X;
-                volatile int STEPS_Y = Y[j] * GENERAL_STEP_Y;
-                
-                SD_Files.readPreviousSteps();
-                Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
-                LCD_RefreshRunMode.Refresh(i ,j); //Empezará a contar el tiempo
-
-              }
-            }
-            LCD_RefreshRunMode.out(Encoders);
-            LCD_RefreshRunMode.outForce(Encoders);
-          }
-        LCD_RunMode.OptionSelection=-1;
-        
-        break;
-        default:
-          LCD_RunMode.Refresh(Encoders);//Imprime los valores actualizados en la pantalla
-          LCD_RunMode.saveLayerNumber(Encoders);//Guarda la opción seleccionada
-          LCD_RunMode.buttomState(Encoders);//Verifica si el usuario presiono el encoder
-          LCD_RunMode.checkTimeForOut(Encoders);
-          LCD_RunMode.out(Encoders); //Configura la opción de salida del while
-
-      }
-    }
-    LCD_StartMenu.OptionSelection=-1;
-    LCD_StartMenu.currentOption=0;
-
-  break;
-
-  case 1://Menú 2 de configuración
-    startTimeForOut();
-    LCD_LRSettings.setToZero(Encoders);
-    while(LCD_LRSettings.getAUX()){
-      c2 = {{0,"CAMBIAR MODO"},{1,"MODIFICAR TIEMPOS"},{2,"MODO NUEVO"}};
-      switch(LCD_LRSettings.OptionSelection){
-        case 0:
-          startTimeForOut();
-          LCD_LRChangeMode.setToZero(Encoders);
-          SD_Files.fileAssociations();
-          LCD_LRChangeMode.OptionNames(SD_Files.asociaciones);
-          while(LCD_LRChangeMode.getAUX()){
-            switch(LCD_LRChangeMode.OptionSelection){
-              case 0:
-                SD_Files.sendFileName(SD_Files.asociaciones[LCD_LRChangeMode.currentOption].nombreArchivo);
-                SD_Files.saveNameFile();
-                LCD_LRChangeMode.OptionSelection = -1;
-                LCD_LRChangeMode.currentOption = 0;
-              break;
-
-              default:
-                LCD_LRChangeMode.lineRefresh(Encoders);
-                LCD_LRChangeMode.buttomState(Encoders,0);
-                LCD_LRChangeMode.checkTimeForOut(Encoders);
-                LCD_LRChangeMode.out(Encoders);
-                
-            }
-          }
-          
-          LCD_LRSettings.OptionSelection=-1;
-          LCD_LRSettings.currentOption=0;
-
-        break;
-
-        case 1:
-        break;
-
-        case 2:
-        LCD_NewModeSteps.setToZero(Encoders);
-        Encoders.savelimit_POS_A(100);
-        Encoders.savelimit_POS_B(100);
-        while(LCD_NewModeSteps.getAUX()){
-          
-          switch(LCD_NewModeSteps.OptionSelection){
-            //Se ejecuta esta opción en caso de que se presione de nuevo el encoder 1
+          switch(LCD_RunMode.OptionSelection){
             case 0:
-              //aqui debería guardarse los valores de los encoders previos
-              Motors.saveData(Encoders);
-              LCD_NewModeTime.setToZero(Encoders);
-              Encoders.savelimit_POS_A(1000);
-              Encoders.savelimit_POS_B(60);
-              while(LCD_NewModeTime.getAUX()){
-                switch(LCD_NewModeTime.OptionSelection){
-                  case 0:
-                    SD_Files.saveStep(Motors.getPOS_A(),Motors.getPOS_B(),Encoders.getPOS_A(),Encoders.getPOS_B(),LCD_NewModeSteps.stepNumber);
-                    LCD_NewModeTime.outForce(Encoders);
-                    Motors.restoreData(Encoders);
-                    LCD_NewModeSteps.stepNumber+=1;
-                  break;
-                  default:
-                    LCD_NewModeTime.Refresh(Encoders);
-                    LCD_NewModeTime.buttomState(Encoders);
-                    LCD_NewModeTime.out(Encoders); 
-                }
-              }
-              LCD_NewModeSteps.OptionSelection=-1;
+              LCD_RefreshRunMode.setToZero(Encoders);
+              while(LCD_RefreshRunMode.getAUX()){
+                LCD_RefreshRunMode.inter();
+                LCD_RefreshRunMode.startClock(); //Empieza a medir el tiempo inicial del proceso
 
-              //Encoders.saveSTEPSX(SD_Files.getAUX_STEPS_X());
-              //Encoders.saveSTEPSY(SD_Files.getAUX_STEPS_Y());
+                SD_Files.selectLastFile(); //Hace lo necesario para recopilar los datos del último archivo
+
+                for (int i = 0; i < LCD_RunMode.getlayerNumber(); i++) {
+                  for (int j = 0; j < SD_Files.getstepNumber(); j++) {
+                    volatile int STEPS_X = X[j] * GENERAL_STEP_X;
+                    volatile int STEPS_Y = Y[j] * GENERAL_STEP_Y;
+                    
+                    SD_Files.readPreviousSteps();
+                    Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), STEPS_X, STEPS_Y);
+                    LCD_RefreshRunMode.Refresh(i ,j); //Empezará a contar el tiempo
+
+                  }
+                }
+                LCD_RefreshRunMode.out(Encoders);
+                LCD_RefreshRunMode.outForce(Encoders);
+              }
+            LCD_RunMode.OptionSelection=-1;
+            
             break;
             default:
-              LCD_NewModeSteps.Refresh(Encoders);
-              LCD_NewModeSteps.buttomState(Encoders);
-        
-              SD_Files.readPreviousSteps();
-              Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
-
-              LCD_NewModeSteps.out(Encoders,SD_Files); //Esta salida debería ser especial y que al salir guarde los datos sacas
-              //              //Se guardan los valores x y dados por el usuario, esto para formar un paso
-              //SD_Files.saveSteps(SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
+              LCD_RunMode.Refresh(Encoders);//Imprime los valores actualizados en la pantalla
+              LCD_RunMode.saveLayerNumber(Encoders);//Guarda la opción seleccionada
+              LCD_RunMode.buttomState(Encoders);//Verifica si el usuario presiono el encoder
+              LCD_RunMode.checkTimeForOut(Encoders);
+              LCD_RunMode.out(Encoders); //Configura la opción de salida del while
 
           }
         }
-        LCD_LRSettings.OptionSelection=-1;
-        LCD_LRSettings.currentOption=0;
+        LCD_StartMenu.OptionSelection=-1;
+        LCD_StartMenu.currentOption=0;
 
-        break;
+      break;
 
-        default:
+      case 1://Menú 2 de configuración
+        startTimeForOut();
+        LCD_LRSettings.setToZero(Encoders);
+        while(LCD_LRSettings.getAUX()){
+          c2 = {{0,"CAMBIAR MODO"},{1,"MODIFICAR TIEMPOS"},{2,"MODO NUEVO"}};
+          switch(LCD_LRSettings.OptionSelection){
+            case 0:
+              startTimeForOut();
+              LCD_LRChangeMode.setToZero(Encoders);
+              SD_Files.fileAssociations();
+              LCD_LRChangeMode.OptionNames(SD_Files.asociaciones);
+              while(LCD_LRChangeMode.getAUX()){
+                switch(LCD_LRChangeMode.OptionSelection){
+                  case 0:
+                    SD_Files.sendFileName(SD_Files.asociaciones[LCD_LRChangeMode.currentOption].nombreArchivo);
+                    SD_Files.saveNameFile();
+                    LCD_LRChangeMode.OptionSelection = -1;
+                    LCD_LRChangeMode.currentOption = 0;
+                  break;
+
+                  default:
+                    LCD_LRChangeMode.lineRefresh(Encoders);
+                    LCD_LRChangeMode.buttomState(Encoders,0);
+                    LCD_LRChangeMode.checkTimeForOut(Encoders);
+                    LCD_LRChangeMode.out(Encoders);
+                    
+                }
+              }
+              
+              LCD_LRSettings.OptionSelection=-1;
+              LCD_LRSettings.currentOption=0;
+
+            break;
+
+            case 1:
+            break;
+
+            case 2:
+              LCD_NewModeSteps.setToZero(Encoders);
+              Encoders.savelimit_POS_A(100);
+              Encoders.savelimit_POS_B(100);
+              while(LCD_NewModeSteps.getAUX()){
+                
+                switch(LCD_NewModeSteps.OptionSelection){
+                  //Se ejecuta esta opción en caso de que se presione de nuevo el encoder 1
+                  case 0:
+                    //aqui debería guardarse los valores de los encoders previos
+                    Motors.saveData(Encoders);
+                    LCD_NewModeTime.setToZero(Encoders);
+                    Encoders.savelimit_POS_A(1000);
+                    Encoders.savelimit_POS_B(60);
+                    while(LCD_NewModeTime.getAUX()){
+                      switch(LCD_NewModeTime.OptionSelection){
+                        case 0:
+                          SD_Files.saveStep(Motors.getPOS_A(),Motors.getPOS_B(),Encoders.getPOS_A(),Encoders.getPOS_B(),LCD_NewModeSteps.stepNumber);
+                          LCD_NewModeTime.outForce(Encoders);
+                          Motors.restoreData(Encoders);
+                          LCD_NewModeSteps.stepNumber+=1;
+                        break;
+                        default:
+                          LCD_NewModeTime.Refresh(Encoders);
+                          LCD_NewModeTime.buttomState(Encoders);
+                          LCD_NewModeTime.out(Encoders); 
+                      }
+                    }
+                    LCD_NewModeSteps.OptionSelection=-1;
+
+                    //Encoders.saveSTEPSX(SD_Files.getAUX_STEPS_X());
+                    //Encoders.saveSTEPSY(SD_Files.getAUX_STEPS_Y());
+                  break;
+                  default:
+                    LCD_NewModeSteps.Refresh(Encoders);
+                    LCD_NewModeSteps.buttomState(Encoders);
+              
+                    SD_Files.readPreviousSteps();
+                    Motors.moveFromTo(SD_Files,SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y(), Encoders.getSTEPSX(), Encoders.getSTEPSY());
+
+                    LCD_NewModeSteps.out(Encoders,SD_Files); //Esta salida debería ser especial y que al salir guarde los datos sacas
+                    //              //Se guardan los valores x y dados por el usuario, esto para formar un paso
+                    //SD_Files.saveSteps(SD_Files.getAUX_STEPS_X(), SD_Files.getAUX_STEPS_Y()); //Guarda la posición hecha por el usuario
+
+                }
+              }
+              LCD_LRSettings.OptionSelection=-1;
+              LCD_LRSettings.currentOption=0;
+
+            break;
+
+            default:
 
 
-          LCD_LRSettings.OptionNames(c2);
-          LCD_LRSettings.lineRefresh(Encoders);
-          LCD_LRSettings.buttomState(Encoders);
-          LCD_LRSettings.checkTimeForOut(Encoders);
-          LCD_LRSettings.out(Encoders);
+              LCD_LRSettings.OptionNames(c2);
+              LCD_LRSettings.lineRefresh(Encoders);
+              LCD_LRSettings.buttomState(Encoders);
+              LCD_LRSettings.checkTimeForOut(Encoders);
+              LCD_LRSettings.out(Encoders);
 
 
-      }
-    }
-    LCD_StartMenu.OptionSelection = -1;
-    LCD_StartMenu.currentOption = 0;
+          }
+        }
+        LCD_StartMenu.OptionSelection = -1;
+        LCD_StartMenu.currentOption = 0;
 
-  break;
+      break;
 
-  default://Imprime el menú inicial
+    default://Imprime el menú inicial
 
-    //LCD_StartMenu.inter();
-    LCD_StartMenu.Refresh(Encoders);
-    LCD_StartMenu.lineRefresh(Encoders);
-    LCD_StartMenu.out(Encoders);
-    LCD_StartMenu.buttomState(Encoders);
+      //LCD_StartMenu.inter();
+      LCD_StartMenu.Refresh(Encoders);
+      LCD_StartMenu.lineRefresh(Encoders);
+      LCD_StartMenu.out(Encoders);
+      LCD_StartMenu.buttomState(Encoders);
   }
 
-}
+  }
 
 
 }
+
+
 void encoder1() {
   Encoders.encoder1();
 }
 
-
 void encoder2() {
   Encoders.encoder2();
 }
-
 
 void push_a() {
   Encoders.push_a();
@@ -1490,9 +1474,6 @@ void push_a() {
 void push_b() {
   Encoders.push_b();
 }
-
-
-
 
 void printDriver1Info(const char* tag) {
   Serial.print("\n==================== "); 
